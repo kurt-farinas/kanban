@@ -1,0 +1,7 @@
+Require local
+
+# Only the page, its assets and the API are web-facing; the CLI, tests, schema and config are not.
+RedirectMatch 403 (?i)/kanban/(tests|\.git)(/|$)
+<FilesMatch "(?i)^(board\.php|lib\.php|config(\.local)?\.php|.*\.sql|\.gitignore)$">
+    Require all denied
+</FilesMatch>
