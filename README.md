@@ -2,6 +2,8 @@
 
 A local kanban board for working with Claude Code. One board for all your projects; Claude moves the cards as it works, and you can drag them too. Dragging a card into a work column opens a new Claude desktop session in that project's folder with the right message typed in.
 
+![Kanban board with cards across To do, Planning, Building, Review, You test and Live](docs/screenshot.png)
+
 ```
 To do → Planning → Building → Review → You test → Live
 ```
