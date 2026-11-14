@@ -294,10 +294,12 @@ $tests = [
         ok($c['working_since'] === null && $c['status'] === null, 'dot or status left on');
     },
     'notify_command_escapes_and_caps' => function (PDO $db) {
-        $cmd = notify_command('Card #5 needs you', "Pick \"A\" or B?\r\nNext line " . str_repeat('x', 300));
+        [$cmd, $env] = notify_command('Card #5 needs you', "-Pick \"A\" or é?\r\nNext line " . str_repeat('x', 300));
         ok(str_starts_with($cmd, 'start "" /B powershell -NoProfile -WindowStyle Hidden'), $cmd);
-        ok(str_contains($cmd, 'toast.ps1" -Title "Card #5 needs you" -Body "Pick  A  or B? Next line x'), $cmd);
-        ok(!str_contains($cmd, "\n") && !str_contains($cmd, 'x' . str_repeat('x', 200)), 'newline or no cap');
+        ok(str_ends_with($cmd, 'toast.ps1" >NUL 2>&1') && !str_contains($cmd, 'Pick'), "text on the command line: $cmd");
+        ok($env['KANBAN_TOAST_TITLE'] === 'Card #5 needs you', $env['KANBAN_TOAST_TITLE']);
+        $b = $env['KANBAN_TOAST_BODY'];
+        ok(str_starts_with($b, '-Pick "A" or é? Next line x') && mb_strlen($b) === 200, "body not raw, joined and capped: $b");
     },
 ];
 

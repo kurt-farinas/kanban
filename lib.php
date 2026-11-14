@@ -300,19 +300,24 @@ function claude_link(array $card, string $folder): ?string
 }
 
 // Windows notification through notify/toast.ps1, started in the background so the caller never waits.
-function notify_command(string $title, string $body): string
+// Returns [command, environment]: the text goes in environment variables, so a leading "-" or non-ASCII survives.
+function notify_command(string $title, string $body): array
 {
     $clean = fn(string $s) => mb_substr(trim(preg_replace('/\s+/u', ' ', $s)), 0, 200);
-    return 'start "" /B powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
-        . escapeshellarg(__DIR__ . '/notify/toast.ps1')
-        . ' -Title ' . escapeshellarg($clean($title)) . ' -Body ' . escapeshellarg($clean($body)) . ' >NUL 2>&1';
+    return ['start "" /B powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        . escapeshellarg(__DIR__ . '/notify/toast.ps1') . ' >NUL 2>&1',
+        ['KANBAN_TOAST_TITLE' => $clean($title), 'KANBAN_TOAST_BODY' => $clean($body)]];
 }
 
 // The test runner sets KANBAN_NO_NOTIFY.
 function notify(string $title, string $body): void
 {
     if (getenv('KANBAN_NO_NOTIFY') === false) {
-        pclose(popen(notify_command($title, $body), 'r'));
+        [$cmd, $env] = notify_command($title, $body);
+        foreach ($env as $k => $v) {
+            putenv("$k=$v"); // inherited by the child process
+        }
+        pclose(popen($cmd, 'r'));
     }
 }
 
