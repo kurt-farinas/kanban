@@ -1663,6 +1663,33 @@ async function preview(my) {
     }
 }
 
+const REPORT_TO_KEY = 'kanban.reportTo'; // localStorage: project name -> the To date of its last report, per viewer
+
+const reportTos = () => {
+    try {
+        const m = JSON.parse(localStorage.getItem(REPORT_TO_KEY));
+        return m && typeof m === 'object' ? m : {};
+    } catch {
+        return {};
+    }
+};
+
+// The day after this project's last report, else a week ago; never after the To date.
+function reportFrom(project) {
+    const last = reportTos()[project];
+    const known = /^\d{4}-\d{2}-\d{2}$/.test(last);
+    const d = known ? new Date(last + 'T00:00') : new Date();
+    d.setDate(d.getDate() + (known ? 1 : -7));
+    const from = d.toLocaleDateString('en-CA');
+    const to = reportForm.elements.to.value;
+    return to && from > to ? to : from;
+}
+
+reportForm.elements.project.addEventListener('change', () => {
+    reportForm.elements.from.value = reportFrom(reportForm.elements.project.value);
+    schedulePreview();
+});
+
 document.getElementById('report-open').addEventListener('click', () => {
     const sites = [...projectInfo.values()].filter(p => p.sections.length && !p.archived);
     if (!sites.length) {
@@ -1672,8 +1699,8 @@ document.getElementById('report-open').addEventListener('click', () => {
     const f = reportForm.elements;
     f.project.replaceChildren(...sites.map(p => new Option(p.site_name || p.name, p.name)));
     if (sites.some(p => p.name === filter.value)) f.project.value = filter.value;
-    f.from.value = '';
     f.to.value = localToday();
+    f.from.value = reportFrom(f.project.value);
     schedulePreview(0);
     reportDialog.showModal();
     f.from.focus();
@@ -1691,6 +1718,9 @@ reportForm.addEventListener('submit', e => {
     const site = p.site_name || p.name;
     const prompt = `Make the president report for ${site} from ${f.from.value} to ${f.to.value} using the weekly-report-for-president skill. `
         + `Get the cards with: ${BOARD_CMD} report "${p.name}" ${f.from.value} ${f.to.value}`;
+    try {
+        localStorage.setItem(REPORT_TO_KEY, JSON.stringify({ ...reportTos(), [p.name]: f.to.value }));
+    } catch { /* private mode: not remembered */ }
     reportDialog.close();
     openLink('claude://code/new?prompt=' + encodeURIComponent(prompt) + '&folder=' + encodeURIComponent(p.folder));
     toast(`Opening Claude for the ${site} report…`);
