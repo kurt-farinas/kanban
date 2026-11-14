@@ -592,6 +592,7 @@ function paint() {
     const active = words.length > 0 || quickOn.size > 0;
     const shown = [...cards.values()].filter(c => !pendingDeletes.has(String(c.id)));
     let visible = 0;
+    const focusedId = document.activeElement?.closest?.('.card')?.dataset.id; // the re-render must not drop j/k focus
     for (const section of document.querySelectorAll('.column')) {
         const mine = shown.filter(c => c.col === section.dataset.col);
         const hits = active ? mine.filter(c => cardMatches(c, words)) : mine;
@@ -603,6 +604,7 @@ function paint() {
     noMatch.hidden = !active || visible > 0;
     noMatch.querySelector('span').textContent = words.length ? `No cards match “${search.value.trim()}”` : 'No cards match the filters';
     applyFolds();
+    if (focusedId) board.querySelector(`.card[data-id="${CSS.escape(focusedId)}"]`)?.focus({ preventScroll: true });
 }
 
 // --- Narrow screens: each column folds under its header. Empty columns and Live start folded; a viewer's
@@ -628,7 +630,8 @@ function applyFolds() {
         section.classList.toggle('folded', shut);
         const toggle = section.querySelector('.col-toggle');
         toggle.tabIndex = narrow.matches ? 0 : -1; // on desktop it is a plain heading
-        toggle.setAttribute('aria-expanded', String(!shut));
+        if (narrow.matches) toggle.setAttribute('aria-expanded', String(!shut));
+        else toggle.removeAttribute('aria-expanded'); // on desktop it folds nothing
     }
 }
 
@@ -672,6 +675,7 @@ document.addEventListener('keydown', e => {
         search.select();
     } else if (e.key === 'n') {
         e.preventDefault();
+        if (!addForm.hidden) return addForm.elements.title.focus(); // already open: keep the chosen project and section
         if (document.querySelector('.column[data-col="todo"]').classList.contains('folded')) {
             document.querySelector('.column[data-col="todo"] .col-toggle').click(); // the add form lives in To do
         }
@@ -681,7 +685,7 @@ document.addEventListener('keydown', e => {
         const all = [...document.querySelectorAll('.column:not(.folded) .card')];
         const i = all.indexOf(cardNow);
         all[i < 0 ? 0 : Math.max(0, Math.min(all.length - 1, i + (e.key === 'j' ? 1 : -1)))]?.focus();
-    } else if (/^[1-6]$/.test(e.key) && cardNow) {
+    } else if (/^[1-6]$/.test(e.key) && cardNow && !offline && !e.repeat) {
         const col = Object.keys(LABELS)[e.key - 1];
         if (col && cardNow.closest('.column').dataset.col !== col) moveCard({ a: 'move', id: cardNow.dataset.id, col });
     } else if (e.key === '?') {
