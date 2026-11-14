@@ -54,6 +54,8 @@ body {
     background: var(--danger);
 }
 
+.banner-update { background: var(--accent); }
+
 .topbar {
     position: relative;
     display: flex;

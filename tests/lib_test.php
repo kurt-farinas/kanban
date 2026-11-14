@@ -313,6 +313,19 @@ $tests = [
         $b = $env['KANBAN_TOAST_BODY'];
         ok(str_starts_with($b, '-Pick "A" or é? Next line x') && mb_strlen($b) === 200, "body not raw, joined and capped: $b");
     },
+    'board_version_tracks_newest_file' => function (PDO $db) {
+        $f = dirname(__DIR__) . '/app.js';
+        $old = filemtime($f);
+        $future = time() + 5;
+        touch($f, $future);
+        clearstatcache();
+        try {
+            ok(board_version() === $future, 'version ' . board_version() . " != $future");
+        } finally {
+            touch($f, $old);
+            clearstatcache();
+        }
+    },
 ];
 
 $server = db('');

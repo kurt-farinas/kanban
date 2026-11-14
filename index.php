@@ -1,8 +1,9 @@
 <?php
 require __DIR__ . '/lib.php';
 $labels = array_combine(COLUMNS, ['To do', 'Planning', 'Building', 'Review', 'You test', 'Live']);
-// Version assets by file time so an open app window never keeps running old code after an update.
-$v = fn(string $f) => $f . '?v=' . filemtime(__DIR__ . '/' . $f);
+// Version assets so an open app window never keeps running old code after an update.
+$version = board_version();
+$v = fn(string $f) => $f . '?v=' . $version;
 header('Cache-Control: no-cache');
 ?>
 <!DOCTYPE html>
@@ -10,6 +11,7 @@ header('Cache-Control: no-cache');
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="board-version" content="<?= $version ?>">
     <title>Kanban</title>
     <script>
         // Runs before paint so the saved theme never flashes; storage can be blocked, so default to dark.
@@ -19,6 +21,7 @@ header('Cache-Control: no-cache');
 </head>
 <body>
     <div id="error" class="banner" role="alert" hidden></div>
+    <div id="update" class="banner banner-update" role="status" hidden>Board updated, reloading when you're done</div>
     <header class="topbar">
         <h1>Kanban</h1>
         <label>Project

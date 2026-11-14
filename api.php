@@ -59,6 +59,7 @@ try {
                 'cards' => list_cards($db, $project === '' ? null : $project),
                 'projects' => $db->query('SELECT name, color FROM projects ORDER BY id')->fetchAll(),
                 'columns' => COLUMNS,
+                'version' => board_version(),
             ]);
         case 'card':
             $id = int_param('id');

@@ -282,10 +282,41 @@ window.addEventListener('focus', seen);
 document.addEventListener('visibilitychange', seen);
 document.addEventListener('pointerdown', seen);
 
+// Auto-update: reload when the board's code changes. A new version must show on two polls in a row
+// (a file may be mid-save), and the reload waits while the user types or drags so nothing is lost.
+const pageVersion = document.querySelector('meta[name="board-version"]')?.content || null;
+let seenVersion = null;
+let updatePending = false;
+
+function busy() {
+    const el = document.activeElement;
+    const typing = el && el.matches('input, textarea, select') && el.value !== '' && el.id !== 'filter';
+    return dragging || typing;
+}
+
+function tryReload() {
+    if (!updatePending) return;
+    if (busy()) document.getElementById('update').hidden = false;
+    else location.reload();
+}
+
+function checkVersion(v) {
+    if (!pageVersion || v === undefined) return; // no version info: never auto-reload
+    v = String(v);
+    if (v === pageVersion) { seenVersion = null; return; }
+    if (seenVersion === v) updatePending = true;
+    seenVersion = v;
+    tryReload();
+}
+
+document.addEventListener('focusout', () => setTimeout(tryReload, 0));
+document.addEventListener('dragend', () => setTimeout(tryReload, 0));
+
 async function load() {
     const my = ++seq;
     try {
         const data = await api({ a: 'list', project: filter.value });
+        checkVersion(data.version);
         if (my === seq && !dragging) render(data);
     } catch (e) {
         showError(e);

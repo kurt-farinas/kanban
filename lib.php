@@ -1,6 +1,13 @@
 <?php
 const COLUMNS = ['todo', 'planning', 'building', 'review', 'test', 'live'];
 
+// Newest file time of the code the page runs; an open board reloads itself when this changes.
+function board_version(): int
+{
+    $files = ['index.php', 'app.js', 'style.css', 'api.php', 'lib.php'];
+    return max(array_map(fn($f) => (int) @filemtime(__DIR__ . '/' . $f), $files));
+}
+
 // ORDER BY c.col sorts by ENUM index, which is COLUMNS order.
 const CARD_SELECT = 'SELECT c.id, c.title, c.col, c.position, c.blocked, c.blocked_reason,
         p.name AS project, p.color, p.folder, c.updated_by, c.updated_at,
