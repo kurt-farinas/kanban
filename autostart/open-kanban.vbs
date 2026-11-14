@@ -41,6 +41,9 @@ If Not ok Then
     WScript.Quit 1
 End If
 
+' Daily database backup (skips itself if today's file already exists).
+sh.Run "wscript.exe """ & fso.GetParentFolderName(WScript.ScriptFullName) & "\backup.vbs""", 0, False
+
 ' Its own app window in Chrome or Edge; otherwise the default browser.
 browser = ""
 If fso.FileExists("C:\Program Files\Google\Chrome\Application\chrome.exe") Then

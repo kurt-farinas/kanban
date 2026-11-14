@@ -1,12 +1,12 @@
 <?php
-// CLI for Claude: php board.php add|move|block|unblock|find|status|note|notes|plan|section|sections|report|sync ...
+// CLI for Claude: php board.php add|move|block|unblock|find|status|note|notes|plan|section|sections|report|sync|backup ...
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
 const USAGE = 'Usage: php board.php add "<title>" <project> [section] | move <id> <column> [position]'
     . ' | block <id> "<reason>" | unblock <id> | find "<text>"'
     . ' | status <id> "<text>" | note <id> "<text>" | notes <id> | plan <id> <path>'
-    . ' | section <id> "<name>"|none | sections <project> | report <project> <from> <to> | sync';
+    . ' | section <id> "<name>"|none | sections <project> | report <project> <from> <to> | sync | backup';
 
 function int_arg(?string $s): int
 {
@@ -24,6 +24,26 @@ function need(?string ...$args): void
 }
 
 [$cmd, $a, $b, $c] = array_pad(array_slice($argv, 1), 4, null);
+
+// Daily backup (Windows Task Scheduler runs this): quiet when the database is off, a toast when a dump fails.
+if ($cmd === 'backup') {
+    try {
+        $today = db()->query('SELECT CURDATE()')->fetchColumn(); // the PC's local date (PHP's timezone may differ)
+    } catch (PDOException $e) {
+        fwrite(STDERR, "Database not running; backup skipped.\n");
+        exit(0);
+    }
+    try {
+        $path = backup_db(backup_dir(), $today);
+        echo $path === null ? "Today's backup already exists.\n" : "Saved $path\n";
+        exit(0);
+    } catch (Throwable $e) {
+        notify('Kanban backup failed', $e->getMessage());
+        fwrite(STDERR, $e->getMessage() . "\n");
+        exit(1);
+    }
+}
+
 try {
     try {
         $db = db();

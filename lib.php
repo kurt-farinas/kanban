@@ -787,3 +787,62 @@ function hook_prune(PDO $db): void
         WHERE working_since IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sessions s
             WHERE s.card_id = c.id AND s.active = 1 AND s.seen_at >= NOW() - INTERVAL 30 MINUTE)');
 }
+
+// Daily database backup (board.php backup): one kanban-YYYY-MM-DD.sql per day in $dir, keeping the newest $keep.
+// Returns the new file's path, or null when today's backup already exists.
+const MYSQLDUMP = 'C:/xampp/mysql/bin/mysqldump.exe';
+
+function backup_dir(): string
+{
+    return (getenv('USERPROFILE') ?: sys_get_temp_dir()) . DIRECTORY_SEPARATOR . 'KanbanBackups';
+}
+
+function backup_db(string $dir, string $date, int $keep = 7, ?string $dbName = null): ?string
+{
+    $d = DateTime::createFromFormat('!Y-m-d', $date);
+    if (!$d || $d->format('Y-m-d') !== $date) {
+        throw new InvalidArgumentException("Bad backup date '$date'.");
+    }
+    if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) {
+        throw new RuntimeException("Can't create the backup folder $dir.");
+    }
+    $path = "$dir/kanban-$date.sql";
+    if (is_file($path)) {
+        return null;
+    }
+    $c = db_config();
+    $tmp = "$path.tmp";
+    $env = getenv();
+    $env['MYSQL_PWD'] = $c['pass']; // the password never goes on the command line
+    $proc = proc_open([MYSQLDUMP, '--host=' . $c['host'], '--user=' . $c['user'], '--single-transaction',
+        '--routines', '--result-file=' . $tmp, $dbName ?? $c['db']], [2 => ['pipe', 'w']], $pipes, null, $env);
+    if (!is_resource($proc)) {
+        throw new RuntimeException('Could not start mysqldump.');
+    }
+    $err = stream_get_contents($pipes[2]);
+    fclose($pipes[2]);
+    $code = proc_close($proc);
+    $tail = is_file($tmp) ? file_get_contents($tmp, false, null, max(0, filesize($tmp) - 200)) : '';
+    if ($code !== 0 || !str_contains($tail, '-- Dump completed')) {
+        @unlink($tmp);
+        throw new RuntimeException('mysqldump failed: ' . trim($err ?: "exit code $code"));
+    }
+    rename($tmp, $path);
+    $all = glob("$dir/kanban-????-??-??.sql");
+    rsort($all); // newest first: the names sort by date
+    foreach (array_slice($all, $keep) as $old) {
+        unlink($old);
+    }
+    return $path;
+}
+
+// Starts today's backup in the background when it doesn't exist yet (called from the Stop hook; never waits).
+function backup_if_due(PDO $db): bool
+{
+    $today = $db->query('SELECT CURDATE()')->fetchColumn();
+    if (is_file(backup_dir() . "/kanban-$today.sql") || getenv('KANBAN_NO_NOTIFY') !== false) {
+        return false;
+    }
+    pclose(popen('start "" /B wscript.exe ' . escapeshellarg(__DIR__ . '/autostart/backup.vbs'), 'r'));
+    return true;
+}

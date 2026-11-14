@@ -71,6 +71,16 @@ Blocking a card (from the page or `board.php block`) also shows a Windows notifi
 Dropping a card into Planning, Building, Review or Live opens
 `claude://code/new?prompt=<message>&folder=<project folder>`. The message is typed in, not sent: you press Enter. Claude desktop asks you to confirm the folder each time. Note: `prompt=` works; `q=` did not fill the message in testing.
 
+## Backups
+
+`php board.php backup` saves the database to `%USERPROFILE%\KanbanBackups\kanban-YYYY-MM-DD.sql`, once a day, keeping the newest 7. It runs by itself at login (`autostart/open-kanban.vbs`) and when a Claude turn ends with no backup for today yet (the Stop hook). When MySQL is off it skips quietly; when a dump fails you get a toast.
+
+Restore a backup (this replaces the board's current data):
+
+```
+C:\xampp\mysql\bin\mysql.exe -uroot kanban < "%USERPROFILE%\KanbanBackups\kanban-YYYY-MM-DD.sql"
+```
+
 ## Safety
 
 The board only answers local requests (`Require local`, `localhost` host check, same-origin writes). The CLI, config, schema, tests and `.git` are not served over HTTP.

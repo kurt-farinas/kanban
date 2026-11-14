@@ -809,6 +809,29 @@ $tests = [
             clearstatcache();
         }
     },
+    'backup_db_writes_once_a_day_and_keeps_newest' => function (PDO $db) {
+        $dir = sys_get_temp_dir() . '/kanban_backup_test_' . getmypid();
+        @mkdir($dir);
+        foreach (['2026-11-01', '2026-11-02', '2026-11-03'] as $d) {
+            file_put_contents("$dir/kanban-$d.sql", 'old');
+        }
+        file_put_contents("$dir/notes.txt", 'not a backup');
+        try {
+            $path = backup_db($dir, '2026-11-14', 2, 'kanban_test');
+            ok($path === "$dir/kanban-2026-11-14.sql", 'path: ' . var_export($path, true));
+            $sql = file_get_contents($path);
+            ok(str_contains($sql, 'CREATE TABLE `cards`') && str_contains($sql, '-- Dump completed'), 'not a full dump');
+            $left = array_map('basename', glob("$dir/*"));
+            sort($left);
+            ok($left === ['kanban-2026-11-03.sql', 'kanban-2026-11-14.sql', 'notes.txt'], implode(',', $left));
+            ok(backup_db($dir, '2026-11-14', 2, 'kanban_test') === null, 'second backup the same day');
+            throws(fn() => backup_db($dir, '14-11-2026', 2, 'kanban_test'), 'bad date');
+            ok(glob("$dir/*.tmp") === [], 'temp file left behind');
+        } finally {
+            array_map('unlink', glob("$dir/*"));
+            rmdir($dir);
+        }
+    },
 ];
 
 $server = db('');

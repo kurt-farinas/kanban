@@ -18,6 +18,9 @@ try {
         }
         @unlink($down);
         hook_event($db, $in);
+        if (($in['hook_event_name'] ?? '') === 'Stop') {
+            backup_if_due($db); // covers days the PC stays on without a fresh login
+        }
     }
 } catch (Throwable) {
 }
