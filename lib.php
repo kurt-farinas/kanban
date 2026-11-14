@@ -337,20 +337,20 @@ function hook_link(PDO $db, string $session, int $card): bool
         return false;
     }
     $db->prepare('INSERT INTO sessions (session_id, card_id, seen_at) VALUES (?, ?, NOW())
-        ON DUPLICATE KEY UPDATE card_id = VALUES(card_id), seen_at = NOW()')->execute([$session, $card]);
+        ON DUPLICATE KEY UPDATE card_id = VALUES(card_id), seen_at = NOW(), active = 1')->execute([$session, $card]);
     hook_touch($db, $session);
     return true;
 }
 
-// Refreshes a linked session and its card's dot; an unlinked session does nothing.
+// Refreshes a linked session (active again, e.g. a follow-up turn) and its card's dot; an unlinked session does nothing.
 function hook_touch(PDO $db, string $session): void
 {
     $db->prepare('UPDATE sessions s JOIN cards c ON c.id = s.card_id
-        SET s.seen_at = NOW(), c.working_since = NOW(), c.updated_at = c.updated_at WHERE s.session_id = ?')
+        SET s.seen_at = NOW(), s.active = 1, c.working_since = NOW(), c.updated_at = c.updated_at WHERE s.session_id = ?')
         ->execute([$session]);
 }
 
-// Ends the session; the card's dot and status go off once no other session works on it.
+// Ends the turn: the row stays (inactive) so the next prompt relights; the dot and status go off once no session is active.
 function hook_stop(PDO $db, string $session): void
 {
     $st = $db->prepare('SELECT card_id FROM sessions WHERE session_id = ?');
@@ -359,9 +359,9 @@ function hook_stop(PDO $db, string $session): void
     if ($card === false) {
         return;
     }
-    $db->prepare('DELETE FROM sessions WHERE session_id = ?')->execute([$session]);
+    $db->prepare('UPDATE sessions SET active = 0 WHERE session_id = ?')->execute([$session]);
     $db->prepare('UPDATE cards SET working_since = NULL, status = NULL, updated_at = updated_at
-        WHERE id = ? AND NOT EXISTS (SELECT 1 FROM sessions WHERE card_id = ?)')->execute([$card, $card]);
+        WHERE id = ? AND NOT EXISTS (SELECT 1 FROM sessions WHERE card_id = ? AND active = 1)')->execute([$card, $card]);
 }
 
 // One Claude Code hook payload (hooks/claude_hook.php): keeps the session's link and its card's dot right.
@@ -395,10 +395,11 @@ function hook_event(PDO $db, array $in): void
     hook_prune($db);
 }
 
-// Drops sessions unseen for 30 min (crashed or closed) and turns off dots no session holds.
+// Drops sessions unseen for a day; turns off dots with no active session seen in 30 min (crashed, closed or relinked).
 function hook_prune(PDO $db): void
 {
-    $db->exec('DELETE FROM sessions WHERE seen_at < NOW() - INTERVAL 30 MINUTE');
+    $db->exec('DELETE FROM sessions WHERE seen_at < NOW() - INTERVAL 24 HOUR');
     $db->exec('UPDATE cards c SET working_since = NULL, status = NULL, updated_at = updated_at
-        WHERE working_since IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.card_id = c.id)');
+        WHERE working_since IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sessions s
+            WHERE s.card_id = c.id AND s.active = 1 AND s.seen_at >= NOW() - INTERVAL 30 MINUTE)');
 }

@@ -40,7 +40,7 @@ php board.php notes <id>                  # oldest first
 php board.php plan <id> <path>            # a .md file inside the project folder
 ```
 
-Upgrading from v1: back up, then `C:\xampp\mysql\bin\mysql.exe -uroot kanban < migrations/002_v2.sql`.
+Upgrading from v1: back up, then `C:\xampp\mysql\bin\mysql.exe -uroot kanban < migrations/002_v2.sql`, then the same with `migrations/003_session_active.sql`.
 
 To have Claude keep the board current, add a rule to your `~/.claude/CLAUDE.md` telling it to run these commands as work moves on.
 

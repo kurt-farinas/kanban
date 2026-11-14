@@ -232,7 +232,7 @@ $tests = [
         hook_stop($db, 's1');
         $c = card($db, $id);
         ok($c['working_since'] === null && $c['status'] === null, 'dot or status left on');
-        ok($db->query('SELECT COUNT(*) FROM sessions')->fetchColumn() == 0, 'session row left');
+        ok($db->query('SELECT active FROM sessions')->fetchColumn() === 0, 'session row not kept inactive');
         ok(!hook_link($db, 's2', 9999), 'linked unknown card');
         hook_touch($db, 'nobody');
         hook_stop($db, 'nobody');
@@ -265,7 +265,9 @@ $tests = [
         $c = add_card($db, 'C', 'Alpha', 'user');
         hook_link($db, 'old', $a);
         hook_link($db, 'fresh', $b);
+        hook_link($db, 'day_old', $b);
         $db->exec("UPDATE sessions SET seen_at = NOW() - INTERVAL 31 MINUTE WHERE session_id = 'old'");
+        $db->exec("UPDATE sessions SET seen_at = NOW() - INTERVAL 25 HOUR WHERE session_id = 'day_old'");
         hook_link($db, 'moved', $c);
         hook_link($db, 'moved', $b); // relinked: C is left with no session
         hook_prune($db);
@@ -273,7 +275,15 @@ $tests = [
         ok(card($db, $c)['working_since'] === null, 'orphan dot left on');
         ok(card($db, $b)['working_since'] !== null, 'live dot turned off');
         $left = $db->query('SELECT session_id FROM sessions ORDER BY session_id')->fetchAll(PDO::FETCH_COLUMN);
-        ok($left === ['fresh', 'moved'], implode(',', $left));
+        ok($left === ['fresh', 'moved', 'old'], implode(',', $left)); // kept a day so a follow-up turn relights
+    },
+    'follow_up_turn_relights_dot' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'UserPromptSubmit', 'prompt' => "Plan card #$id"]);
+        hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'Stop']);
+        ok(card($db, $id)['working_since'] === null, 'dot on after Stop');
+        hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'UserPromptSubmit', 'prompt' => 'yes go ahead']);
+        ok(card($db, $id)['working_since'] !== null, 'follow-up turn did not relight the dot');
     },
     'notify_command_escapes_and_caps' => function (PDO $db) {
         $cmd = notify_command('Card #5 needs you', "Pick \"A\" or B?\r\nNext line " . str_repeat('x', 300));

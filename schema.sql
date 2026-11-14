@@ -47,6 +47,7 @@ CREATE TABLE sessions (
     session_id VARCHAR(100) PRIMARY KEY,
     card_id INT NOT NULL,
     seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    active TINYINT NOT NULL DEFAULT 1, -- 0 between turns: Stop ran, a follow-up prompt sets it back
     FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
