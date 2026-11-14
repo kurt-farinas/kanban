@@ -50,13 +50,12 @@ if ($post !== in_array($a, POST_ACTIONS, true)) {
 
 try {
     if ($a === 'start_db') {
-        // Same hidden launch as autostart/start-xampp.vbs; a second click while it runs does nothing.
+        // A second click while it runs does nothing. The script starts mysqld through WMI so it is not a child of Apache.
         exec('tasklist /FI "IMAGENAME eq mysqld.exe" /NH', $lines);
         if (stripos(implode("\n", $lines), 'mysqld.exe') !== false) {
             out(['started' => false]);
         }
-        chdir('C:\xampp');
-        pclose(popen('start "" /B "C:\xampp\mysql\bin\mysqld.exe" --defaults-file="C:\xampp\mysql\bin\my.ini" --standalone >NUL 2>&1', 'r'));
+        exec('cscript //B //Nologo "' . __DIR__ . '\autostart\start-mysql.vbs"');
         out(['started' => true]);
     }
     try {

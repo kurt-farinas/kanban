@@ -52,7 +52,7 @@ async function api(params, post = false) {
     banner.hidden = true;
     if (params.a !== 'start_db') { // start_db answers without the database
         okSeq = Math.max(okSeq, n);
-        goOnline();
+        if (n > failSeq) goOnline(); // a success sent before the newest failure says nothing about now
     }
     return data;
 }
@@ -66,12 +66,14 @@ let offline = false;
 let offlineRun = 0; // a new offline spell gets a new countdown; an old one stops
 let apiSeq = 0;
 let okSeq = 0; // newest request that reached the database
+let failSeq = 0; // newest request that found the board unreachable
 
 // Marks the error as an outage (so the red banner skips it) and enters offline mode; returns the error.
 function goOffline(err, down, dbDown, n) {
     if (!down) return err;
     err.offline = true;
     if (n < okSeq) return err; // sent before a newer request got through (e.g. a slow connect timeout): stale
+    failSeq = Math.max(failSeq, n);
     startDb.hidden = !dbDown; // the button only helps when Apache answered and MySQL did not
     if (offline) return err;
     offline = true;
@@ -88,10 +90,10 @@ function countdown(run, left) {
     if (!offline || run !== offlineRun) return;
     const text = offlineBar.querySelector('.offline-text');
     if (left > 0) {
-        text.textContent = `Can't reach the database. Retrying in ${left} s…`;
+        text.textContent = `Retrying in ${left} s…`;
         setTimeout(countdown, 1000, run, left - 1);
     } else {
-        text.textContent = "Can't reach the database. Retrying…";
+        text.textContent = 'Retrying…';
         load().then(() => countdown(run, RETRY_S)); // load() never rejects
     }
 }
@@ -140,7 +142,8 @@ const TOAST_MAX = 3;
 
 // kind: 'user' (gray), 'claude' (clay), 'error' (red, stays until closed unless ms is given).
 // action: {label, run} adds a button that closes the toast and runs. Returns a function that closes it.
-function toast(text, { kind = 'user', action, ms } = {}) {
+// xUndo: the ✕ runs the action too (for a toast that holds something back until it ends).
+function toast(text, { kind = 'user', action, ms, xUndo = false } = {}) {
     const t = el('div', `toast toast-${kind}`);
     t.setAttribute('role', kind === 'error' ? 'alert' : 'status');
     if (kind === 'claude') {
@@ -155,6 +158,7 @@ function toast(text, { kind = 'user', action, ms } = {}) {
         t.remove();
     };
     if (action) {
+        t.dataset.action = '';
         const b = el('button', 'toast-action', action.label);
         b.type = 'button';
         b.addEventListener('click', () => { close(); action.run(); });
@@ -163,12 +167,14 @@ function toast(text, { kind = 'user', action, ms } = {}) {
     const x = el('button', 'close', '✕');
     x.type = 'button';
     x.setAttribute('aria-label', 'Dismiss');
-    x.addEventListener('click', close);
+    x.addEventListener('click', () => { close(); if (action && xUndo) action.run(); });
     t.append(x);
     toastBox.append(t);
-    // Over the limit the oldest goes early, errors last.
+    // Over the limit the oldest goes early, errors last; a toast with an Undo never does (the limit stretches).
     while (toastBox.children.length > TOAST_MAX) {
-        (toastBox.querySelector('.toast:not(.toast-error)') || toastBox.firstElementChild).remove();
+        const old = toastBox.querySelector('.toast:not(.toast-error):not([data-action])') || toastBox.querySelector('.toast:not([data-action])');
+        if (!old) break;
+        old.remove();
     }
     ms ??= kind === 'error' ? null : 4000;
     if (ms !== null) timer = setTimeout(close, ms);
@@ -585,6 +591,7 @@ function openSoon(c, link) {
     }, OPEN_MS);
     close = toast(`Opening Claude for #${c.id}…`, {
         ms: OPEN_MS,
+        xUndo: true,
         action: {
             label: 'Undo',
             run: async () => {
@@ -951,9 +958,20 @@ async function deleteCard(id) {
     });
     if (!ok || pendingDeletes.has(id)) return;
     pendingDeletes.add(id);
-    if (openId === id) closePanel();
-    board.querySelector(`.card[data-id="${CSS.escape(id)}"]`)?.remove();
-    load(); // re-render so counts and empty hints match
+    const fromPanel = openId === id;
+    if (fromPanel) closePanel();
+    const gone = board.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+    const next = gone?.nextElementSibling || gone?.previousElementSibling;
+    const nextId = next?.dataset.id;
+    const column = gone?.closest('.column');
+    gone?.remove();
+    load().then(() => { // re-render so counts and empty hints match; the render replaces the cards, so focus after it
+        if (!fromPanel) return;
+        const target = (nextId && board.querySelector(`.card[data-id="${CSS.escape(nextId)}"]`)) || column;
+        if (!target) return;
+        if (target === column) column.tabIndex = -1;
+        target.focus();
+    });
     const timer = setTimeout(async () => {
         try {
             await api({ a: 'delete', id }, true);
@@ -1025,11 +1043,17 @@ async function pollClaude() {
         const { events } = await api({ a: 'events', after: lastEventId });
         if (!events.length) return;
         lastEventId = events[events.length - 1].id;
-        const byCard = Map.groupBy(events.filter(e => e.author === 'claude'), e => e.card_id);
+        const byCard = new Map();
+        for (const e of events) {
+            if (e.author !== 'claude') continue;
+            if (!byCard.has(e.card_id)) byCard.set(e.card_id, []);
+            byCard.get(e.card_id).push(e);
+        }
         for (const [id, list] of byCard) {
             const e = list[0];
-            toast(list.length > 1 ? `Claude made ${list.length} changes on #${id}`
-                : e.action === 'blocked' ? `Claude needs you on #${id}: ${e.detail}`
+            const blocked = list.findLast(b => b.action === 'blocked'); // a question outranks the rest
+            toast(blocked ? `Claude needs you on #${id}: ${blocked.detail}${list.length > 1 ? ` (+${list.length - 1} more)` : ''}`
+                : list.length > 1 ? `Claude made ${list.length} changes on #${id}`
                 : `Claude ${eventText(e)}`, { kind: 'claude' });
         }
     } catch (e) {

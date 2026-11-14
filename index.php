@@ -21,7 +21,7 @@ header('Cache-Control: no-cache');
 </head>
 <body>
     <div id="error" class="banner" role="alert" hidden></div>
-    <div id="offline" class="banner" role="alert" hidden><span class="offline-text"></span> <button type="button" id="start-db" class="banner-btn" hidden>Start database</button></div>
+    <div id="offline" class="banner" hidden><span role="alert">Can't reach the database.</span> <span class="offline-text" aria-live="off"></span> <button type="button" id="start-db" class="banner-btn" hidden>Start database</button></div>
     <div id="update" class="banner banner-update" role="status" hidden>Board updated, reloading when you're done</div>
     <header class="topbar">
         <h1>Kanban</h1>
