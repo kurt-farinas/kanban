@@ -848,6 +848,9 @@ $tests = [
             add_project($db, 'Bare', $dir, 'slate', '', [], 'claude');
             $b = project_row($db, 'Bare');
             ok($b['sections'] === [] && $b['site_name'] === null, json_encode($b));
+            // Explorer's "Copy as path" wraps the folder in double quotes.
+            add_project($db, 'Quoted', "\"$dir\"", 'slate', null, [], 'user');
+            ok(project_row($db, 'Quoted')['folder'] === realpath($dir), project_row($db, 'Quoted')['folder']);
         });
     },
     'add_project_validates' => function (PDO $db) {
@@ -861,9 +864,24 @@ $tests = [
             throws(fn() => add_project($db, 'New', $dir, 'amber', null, [], 'user'), 'bad colour');
             throws(fn() => add_project($db, 'New', $dir, 'blue', null, [['name' => 'A'], ['name' => 'a']], 'user'), 'duplicate section');
             throws(fn() => add_project($db, 'New', $dir, 'blue', null, [['name' => str_repeat('x', 61)]], 'user'), '61-char section');
+            // The database's collation judges duplicates: accents differ, names still clash.
+            ok(str_contains(error_of(fn() => add_project($db, 'Álpha', $dir, 'blue', null, [], 'user')), 'already exists'), 'accented project');
+            ok(str_contains(error_of(fn() => add_project($db, 'New', $dir, 'blue', null, [['name' => 'Café'], ['name' => 'cafe']], 'user')),
+                'already exists'), 'accented section');
+            // UNC paths are refused (stat'ed every poll); so is a path too long for the column.
+            throws(fn() => add_project($db, 'New', '\\\\localhost\\' . str_replace(':', '$', $dir), 'blue', null, [], 'user'), 'UNC folder');
+            ok(str_contains(error_of(fn() => add_project($db, 'New', 'C:\\' . str_repeat('x', 260), 'blue', null, [], 'user')), '255'),
+                'too-long folder');
             ok(count(list_projects($db)) === 4, 'bad project written');
             ok($db->query('SELECT COUNT(*) FROM sections WHERE project_id > 4')->fetchColumn() == 0, 'section of a refused project written');
         });
+    },
+    'is_duplicate_key_spots_a_name_race_only' => function (PDO $db) {
+        $caught = fn(callable $fn) => (function () use ($fn) { try { $fn(); } catch (Throwable $e) { return $e; } return null; })();
+        $dup = $caught(fn() => $db->exec("INSERT INTO projects (name, folder, color) SELECT name, folder, color FROM projects LIMIT 1"));
+        ok($dup !== null && is_duplicate_key($dup), 'duplicate project name');
+        ok(!is_duplicate_key($caught(fn() => $db->exec('SELECT nope FROM projects'))), 'other SQL error');
+        ok(!is_duplicate_key(new InvalidArgumentException('x')), 'not a PDO error');
     },
     'edit_project_keeps_cards' => function (PDO $db) {
         $dir = dirname(__DIR__);
@@ -906,6 +924,9 @@ $tests = [
             $loans = list_sections($db, 'Alpha')[1]['id'];
             throws(fn() => save_sections($db, $id, [['id' => $loans, 'name' => 'Loans']], 'user'), "Alpha's section");
             ok(array_column(list_sections($db, 'Alpha'), 'name') === ['Members', 'Loans', 'Whole System'], 'Alpha changed');
+            // Id 0 would match no row and silently drop the section.
+            throws(fn() => save_sections($db, $id, [['id' => $a, 'name' => 'B'], ['id' => 0, 'name' => 'Z']], 'user'), 'section id 0');
+            ok(array_column(project_row($db, 'Shop')['sections'], 'name') === ['B'], 'id 0 changed sections');
             $n = count(list_events($db));
             save_sections($db, $id, [['id' => $a, 'name' => 'B']], 'user');
             ok(count(list_events($db)) === $n, 'unchanged sections logged');

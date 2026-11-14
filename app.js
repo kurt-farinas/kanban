@@ -367,14 +367,20 @@ function md(src) {
 
 // --- Board ---
 
+let filledNames = null; // project names the dropdowns hold; unchanged = no rebuild, so an open dropdown stays open
+
+// Rebuilds every project dropdown, keeping each one's choice by position: projects come in id order and are never
+// deleted, so a renamed project keeps its place and stays chosen under its new name.
 function fillProjects(projects) {
-    if (filter.options.length > 1) return;
-    for (const p of projects) {
-        filter.add(new Option(p.name, p.name));
-        projectSelect.add(new Option(p.name, p.name));
-        editForm.elements.project.add(new Option(p.name, p.name));
-        requestForm.elements.project.add(new Option(p.name, p.name));
+    const names = projects.map(p => p.name);
+    if (filledNames === names.join('\n')) return;
+    filledNames = names.join('\n');
+    for (const select of [filter, projectSelect, editForm.elements.project, requestForm.elements.project]) {
+        const i = select.selectedIndex;
+        select.replaceChildren(...(select === filter ? [new Option('All projects', '')] : []), ...names.map(n => new Option(n, n)));
+        select.selectedIndex = Math.max(i, 0);
     }
+    fillSections(addForm.elements.section, projectSelect.value, addForm.elements.section.value);
 }
 
 const KINDS = { do: 'Do', change: 'Change', remove: 'Remove' };
@@ -609,7 +615,7 @@ search.addEventListener('keydown', e => {
 // "/" jumps to the search box unless you are typing somewhere or a popup is open.
 document.addEventListener('keydown', e => {
     if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
-    if (e.target.closest?.('input, textarea, select, [contenteditable]') || confirmDone || reportDialog.open || openId !== null || menu) return;
+    if (e.target.closest?.('input, textarea, select, [contenteditable]') || confirmDone || reportDialog.open || projectsDialog.open || openId !== null || menu) return;
     e.preventDefault();
     search.focus();
     search.select();
@@ -634,8 +640,8 @@ noMatch.querySelector('button').addEventListener('click', () => {
 syncQuick();
 
 function render(data) {
+    projectInfo = new Map(data.projects.map(p => [p.name, p])); // before fillProjects, which refills the add form's sections
     fillProjects(data.projects);
-    projectInfo = new Map(data.projects.map(p => [p.name, p]));
     cards = new Map(data.cards.map(c => [String(c.id), c]));
     pruneExpanded(data.cards, filter.value === '');
     paint();
@@ -711,7 +717,7 @@ let updatePending = false;
 function userBusy() {
     const el = document.activeElement;
     const typing = el && el.matches('input, textarea, select') && el.value !== '' && el.id !== 'filter';
-    return dragging || typing || pendingDeletes.size > 0 || opening > 0 || confirmDone || reportDialog.open;
+    return dragging || typing || pendingDeletes.size > 0 || opening > 0 || confirmDone || reportDialog.open || projectsDialog.open;
 }
 
 function tryReload() {
@@ -742,6 +748,11 @@ async function load() {
         checkVersion(data.version);
         if (my === seq && !dragging && !confirmDone) render(data); // a drop waiting on the popup keeps its preview
     } catch (e) {
+        if (filter.value && e.message.startsWith('Unknown project')) { // renamed in another tab: show all and carry on
+            filter.value = '';
+            filter.dispatchEvent(new Event('change'));
+            return;
+        }
         showError(e);
     }
 }
@@ -1086,12 +1097,17 @@ async function showCard(fill, select = false) {
     if (id !== openId) return;
     const c = openCard = data.card;
     document.getElementById('panel-heading').textContent = `Card #${c.id}`;
+    // The card's project was renamed: its old name is gone from the dropdown, so show the new one.
+    if (editForm.elements.project.selectedIndex < 0) editForm.elements.project.value = c.project;
     if (fill) {
         editForm.elements.title.value = c.title;
         editForm.elements.project.value = c.project;
         fillSections(editForm.elements.section, c.project, filledSection = c.section ?? '');
         if (select && !panel.hidden) editForm.elements.title.select();
         showChatBtn(c); // not on every poll: the lookup reads the app's chat files
+    } else if (editForm.elements.section.value === filledSection && editForm.elements.project.value === c.project) {
+        // Project and section untouched: pick up renamed, added or removed sections.
+        fillSections(editForm.elements.section, c.project, filledSection = c.section ?? '');
     }
     panel.querySelector('.working').hidden = !isWorking(c);
     const status = [LABELS[c.col] || c.col];
@@ -1128,7 +1144,7 @@ overlay.addEventListener('click', e => {
 });
 
 document.addEventListener('keydown', e => {
-    if (e.key !== 'Escape' || reportDialog.open) return; // the dialog closes itself
+    if (e.key !== 'Escape' || reportDialog.open || projectsDialog.open) return; // the dialog closes itself
     if (openId !== null) closePanel();
     else if (!activity.hidden) toggleActivity(false);
     else if (!requestsBox.hidden) toggleRequests(false);
@@ -1287,6 +1303,8 @@ function eventText(e) {
         case 'request': return `added a request (${e.detail})`;
         case 'request_deleted': return 'deleted a request';
         case 'live': return `${n} went live — ${e.detail}`;
+        // detail: "added X", "edited X", "renamed A to B" or "sections of X: a, b"
+        case 'project': return e.detail.startsWith('sections of ') ? `changed the ${e.detail}` : e.detail;
         default: return `${e.action} ${n}`;
     }
 }
@@ -1562,6 +1580,176 @@ reportForm.addEventListener('submit', e => {
     reportDialog.close();
     openLink('claude://code/new?prompt=' + encodeURIComponent(prompt) + '&folder=' + encodeURIComponent(p.folder));
     toast(`Opening Claude for the ${site} report…`);
+});
+
+// --- Projects: list every project, add one, or edit one and its sections (there is no delete) ---
+
+const projectsDialog = document.getElementById('projects');
+const projectsView = projectsDialog.querySelector('.projects-list-view');
+const projectForm = document.getElementById('project-form');
+const projectError = projectForm.querySelector('.field-error');
+const sectionRows = projectForm.querySelector('.section-rows');
+let projectRows = []; // a=projects: each with id, folder, colour, card count and sections with ids and card counts
+let projectColors = [];
+let editingProject = null; // the row being edited; null while adding
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+async function loadProjects() {
+    ({ projects: projectRows, colors: projectColors } = await api({ a: 'projects' }));
+    const box = projectForm.querySelector('.swatches');
+    if (box.querySelector('input')) return;
+    box.append(...projectColors.map(c => {
+        const label = el('label', 'swatch');
+        const input = el('input', '');
+        input.type = 'radio';
+        input.name = 'color';
+        input.value = c;
+        const dot = el('span', 'proj-dot');
+        dot.dataset.color = c;
+        label.append(input, dot, c[0].toUpperCase() + c.slice(1));
+        return label;
+    }));
+}
+
+function showProjectList() {
+    projectForm.hidden = true;
+    projectsView.hidden = false;
+    projectsDialog.querySelector('.project-list').replaceChildren(...projectRows.map(p => {
+        const li = el('li', 'project-row');
+        const dot = el('span', 'proj-dot');
+        dot.dataset.color = p.color;
+        const edit = el('button', 'secondary', 'Edit');
+        edit.type = 'button';
+        edit.setAttribute('aria-label', `Edit ${p.name}`);
+        edit.addEventListener('click', async () => { // fresh rows, so a stale section list can't drop sections on save
+            try {
+                await loadProjects();
+            } catch (err) {
+                toastError(err);
+                return;
+            }
+            showProjectForm(projectRows.find(x => x.id === p.id));
+        });
+        li.append(dot, el('span', 'project-name', p.name), el('span', 'project-count', plural(p.card_count, 'card')), edit);
+        return li;
+    }));
+}
+
+function sectionRow(s) {
+    const li = el('li', 'section-row');
+    li.dataset.id = s.id ?? '';
+    const name = el('input', '');
+    name.value = s.name;
+    name.maxLength = 60;
+    name.setAttribute('aria-label', 'Section name');
+    const button = (text, label, run) => {
+        const b = el('button', 'close', text);
+        b.type = 'button';
+        b.setAttribute('aria-label', label);
+        b.addEventListener('click', run);
+        return b;
+    };
+    const up = button('↑', 'Move up', () => { li.previousElementSibling?.before(li); syncSectionRows(); up.focus(); });
+    const down = button('↓', 'Move down', () => { li.nextElementSibling?.after(li); syncSectionRows(); down.focus(); });
+    const remove = button('✕', 'Remove section', () => { li.remove(); syncSectionRows(); });
+    if (s.card_count > 0) {
+        remove.disabled = true;
+        remove.title = `Used by ${plural(s.card_count, 'card')}`;
+    }
+    li.append(name, up, down, remove);
+    return li;
+}
+
+// The first row can't go up and the last can't go down.
+function syncSectionRows() {
+    const rows = [...sectionRows.children];
+    rows.forEach((li, i) => {
+        const [up, down] = li.querySelectorAll('button');
+        up.disabled = i === 0;
+        down.disabled = i === rows.length - 1;
+    });
+}
+
+function showProjectForm(p) {
+    editingProject = p;
+    const f = projectForm.elements;
+    projectForm.querySelector('.project-form-title').textContent = p ? `Edit ${p.name}` : 'Add project';
+    f.name.value = p?.name ?? '';
+    f.folder.value = p?.folder ?? '';
+    f.site_name.value = p?.site_name ?? '';
+    const used = new Set(projectRows.map(x => x.color));
+    f.color.value = p?.color ?? projectColors.find(c => !used.has(c)) ?? projectColors[0];
+    sectionRows.replaceChildren(...(p?.sections ?? []).map(sectionRow));
+    syncSectionRows();
+    projectError.hidden = true;
+    projectsView.hidden = true;
+    projectForm.hidden = false;
+    f.name.focus();
+}
+
+document.getElementById('projects-open').addEventListener('click', async () => {
+    try {
+        await loadProjects();
+    } catch (err) {
+        toastError(err);
+        return;
+    }
+    showProjectList();
+    projectsDialog.showModal();
+});
+
+document.getElementById('project-new').addEventListener('click', () => showProjectForm(null));
+projectsDialog.querySelector('[data-close]').addEventListener('click', () => projectsDialog.close());
+projectForm.querySelector('[data-back]').addEventListener('click', showProjectList);
+projectsDialog.addEventListener('click', e => { if (e.target === projectsDialog) projectsDialog.close(); }); // backdrop
+projectForm.querySelector('.section-add').addEventListener('click', () => {
+    const li = sectionRow({ id: null, name: '', card_count: 0 });
+    sectionRows.append(li);
+    syncSectionRows();
+    li.querySelector('input').focus();
+});
+projectForm.addEventListener('input', () => { projectError.hidden = true; });
+
+projectForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const save = projectForm.querySelector('button[type=submit]');
+    if (save.disabled) return; // a save is running (Enter in a field still submits)
+    const f = projectForm.elements;
+    const p = editingProject;
+    const fields = { name: f.name.value, folder: f.folder.value, color: f.color.value, site_name: f.site_name.value };
+    const sections = JSON.stringify([...sectionRows.children].map(li => ({
+        id: li.dataset.id ? Number(li.dataset.id) : null, name: li.querySelector('input').value,
+    })));
+    // Unchanged rows are not sent: a list another tab has since changed would otherwise undo that change.
+    const loaded = JSON.stringify((p?.sections ?? []).map(s => ({ id: s.id, name: s.name })));
+    try {
+        await busy(save, (async () => {
+            if (p) {
+                await api({ a: 'project_edit', id: p.id, ...fields }, true);
+                if (filter.value === p.name) { // keep the board filtered on it under its new name
+                    filter.selectedOptions[0].value = filter.selectedOptions[0].text = fields.name.trim();
+                }
+                if (sections !== loaded) await api({ a: 'sections_save', id: p.id, sections }, true);
+            } else {
+                await api({ a: 'project_add', ...fields, sections }, true);
+            }
+        })());
+    } catch (err) {
+        projectError.textContent = err.message;
+        projectError.hidden = false;
+        if (p) load(); // the project part may have saved before the sections failed
+        return;
+    }
+    toast(`${f.name.value.trim()} ${p ? 'saved' : 'added'}`);
+    load();
+    if (openId !== null) showCard(false); // the open card's project may have a new name
+    try {
+        await loadProjects();
+        showProjectList();
+    } catch (err) {
+        toastError(err);
+    }
 });
 
 function refresh() {

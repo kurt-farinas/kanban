@@ -35,6 +35,7 @@ header('Cache-Control: no-cache');
             <button type="button" class="bar-btn" data-quick="working" aria-pressed="false">Claude working</button>
         </div>
         <button type="button" id="report-open" class="bar-btn" data-needs-db>Make report</button>
+        <button type="button" id="projects-open" class="bar-btn" data-needs-db>Projects</button>
         <button type="button" id="requests-toggle" class="bar-btn" aria-expanded="false" aria-controls="requests">Requests</button>
         <button type="button" id="activity-toggle" class="bar-btn" aria-expanded="false" aria-controls="activity">Activity</button>
         <button type="button" id="theme" class="bar-btn" aria-label="Switch theme">Light</button>
@@ -136,6 +137,32 @@ header('Cache-Control: no-cache');
             <div class="confirm-actions">
                 <button type="button" class="secondary" id="report-cancel">Cancel</button>
                 <button type="submit" class="primary" disabled>Make report</button>
+            </div>
+        </form>
+    </dialog>
+    <dialog id="projects" class="confirm report" aria-labelledby="projects-title">
+        <div class="projects-list-view">
+            <h2 id="projects-title">Projects</h2>
+            <ul class="project-list"></ul>
+            <div class="confirm-actions">
+                <button type="button" class="secondary" data-close>Close</button>
+                <button type="button" class="primary" id="project-new" data-needs-db>Add project</button>
+            </div>
+        </div>
+        <form class="stack" id="project-form" novalidate hidden>
+            <h2 class="project-form-title"></h2>
+            <label class="field">Name <input name="name" maxlength="50" autocomplete="off"></label>
+            <label class="field">Folder <input name="folder" placeholder="C:\xampp\htdocs\my-site" autocomplete="off" spellcheck="false"></label>
+            <fieldset class="field swatches"><legend>Colour</legend></fieldset>
+            <label class="field">Report name (optional) <input name="site_name" maxlength="100" placeholder="The name staff see, used as the report title" autocomplete="off"></label>
+            <fieldset class="field"><legend>Sections</legend>
+                <ul class="section-rows"></ul>
+                <button type="button" class="secondary section-add">Add section</button>
+            </fieldset>
+            <p class="field-error" role="alert" hidden></p>
+            <div class="confirm-actions">
+                <button type="button" class="secondary" data-back>Back</button>
+                <button type="submit" class="primary" data-needs-db>Save</button>
             </div>
         </form>
     </dialog>

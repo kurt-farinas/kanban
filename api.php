@@ -6,12 +6,17 @@
 //       a=start_db (launches MySQL if it is not running; works without a database).
 // Requests: GET a=requests (requests + earlier requesters); POST a=request_add (body, requester, project, kind),
 //       a=request_card (id, title), a=request_delete (id).
+// Projects: GET a=projects (each with folder, colour, report name, card count and sections with ids and card counts);
+//       POST a=project_add (name, folder, color, site_name, sections), a=project_edit (id, name, folder, color, site_name),
+//       a=sections_save (id, sections). sections is a JSON list of {id: int|null, name}, in report order.
+// Bad input, including a name taken at the same moment by another save, answers 400 with the message.
 // A database that can't be reached answers 503 with db_down: true.
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
-const GET_ACTIONS = ['list', 'card', 'events', 'plan', 'chat', 'requests', 'report_preview'];
-const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note', 'section', 'start_db', 'request_add', 'request_card', 'request_delete'];
+const GET_ACTIONS = ['list', 'card', 'events', 'plan', 'chat', 'requests', 'report_preview', 'projects'];
+const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note', 'section', 'start_db', 'request_add', 'request_card', 'request_delete',
+    'project_add', 'project_edit', 'sections_save'];
 
 function out(array $data, int $code = 200): never
 {
@@ -31,6 +36,23 @@ function int_param(string $name, bool $optional = false): ?int
         throw new InvalidArgumentException("$name must be a whole number.");
     }
     return (int) $v;
+}
+
+// The JSON `sections` field: a list of {id: int|null, name: string}.
+function sections_param(bool $required = false): array
+{
+    if ($required && !isset($_POST['sections'])) {
+        throw new InvalidArgumentException('sections is required.');
+    }
+    $list = json_decode((string) ($_POST['sections'] ?? '[]'), true);
+    $good = is_array($list) && array_is_list($list);
+    foreach ($good ? $list : [] as $s) {
+        $good = $good && is_array($s) && is_string($s['name'] ?? null) && (($s['id'] ?? null) === null || is_int($s['id']));
+    }
+    if (!$good) {
+        throw new InvalidArgumentException('sections must be a JSON list of {id, name}.');
+    }
+    return $list;
 }
 
 $post = $_SERVER['REQUEST_METHOD'] === 'POST';
@@ -126,6 +148,18 @@ try {
         case 'request_delete':
             delete_request($db, int_param('id'), 'user');
             out(['ok' => true]);
+        case 'projects':
+            out(['projects' => list_projects($db), 'colors' => PROJECT_COLORS]);
+        case 'project_add':
+            out(['id' => add_project($db, $_POST['name'] ?? '', $_POST['folder'] ?? '', $_POST['color'] ?? '',
+                $_POST['site_name'] ?? null, sections_param(), 'user')]);
+        case 'project_edit':
+            edit_project($db, int_param('id'), $_POST['name'] ?? '', $_POST['folder'] ?? '', $_POST['color'] ?? '',
+                $_POST['site_name'] ?? null, 'user');
+            out(['ok' => true]);
+        case 'sections_save':
+            save_sections($db, int_param('id'), sections_param(true), 'user');
+            out(['ok' => true]);
     }
     $id = int_param('id');
     $col = $_POST['col'] ?? '';
@@ -136,5 +170,8 @@ try {
 } catch (InvalidArgumentException $e) {
     out(['error' => $e->getMessage()], 400);
 } catch (Throwable $e) {
+    if (is_duplicate_key($e)) { // the name checks passed, then another save took the name first
+        out(['error' => 'That name was just taken by another save. Reload and pick another name.'], 400);
+    }
     out(['error' => 'Server error: ' . $e->getMessage()], 500);
 }

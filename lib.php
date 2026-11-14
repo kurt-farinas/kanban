@@ -212,11 +212,15 @@ function list_projects(PDO $db): array
     return $projects;
 }
 
-// An existing absolute folder (drive or UNC path); returns its real path, so slashes and a trailing \ are normalised.
+// An existing folder on a drive (no UNC: it is stat'ed on every poll); returns its real path, so slashes and a
+// trailing \ are normalised. Explorer's "Copy as path" quotes are dropped.
 function check_folder(string $f): string
 {
-    $f = trim($f);
-    $real = preg_match('#^([A-Za-z]:[\\\\/]|[\\\\/]{2})#', $f) ? realpath($f) : false;
+    $f = preg_replace('/^"(.*)"$/s', '$1', trim($f));
+    $real = preg_match('#^[A-Za-z]:[\\\\/]#', $f) ? realpath($f) : false;
+    if (mb_strlen($f) > 255 || ($real !== false && mb_strlen($real) > 255)) {
+        throw new InvalidArgumentException('Folder path is longer than 255 characters.');
+    }
     if ($real === false || !is_dir($real)) {
         throw new InvalidArgumentException("Folder must be an existing full path, like C:\\xampp\\htdocs\\my-site ($f).");
     }
@@ -230,10 +234,11 @@ function check_project(PDO $db, ?int $id, string $name, string $folder, string $
     if ($name === '' || mb_strlen($name) > 50) {
         throw new InvalidArgumentException('Project name must be 1 to 50 characters.');
     }
-    $st = $db->prepare('SELECT id FROM projects WHERE LOWER(name) = LOWER(?) AND id <> ?');
+    // The column's collation decides, so case and accent variants ("Café", "cafe") count as the same name.
+    $st = $db->prepare('SELECT id FROM projects WHERE name = ? AND id <> ?');
     $st->execute([$name, $id ?? 0]);
     if ($st->fetchColumn() !== false) {
-        throw new InvalidArgumentException("There is already a project called $name.");
+        throw new InvalidArgumentException("A project with that name already exists ($name).");
     }
     if (!in_array($color, PROJECT_COLORS, true)) {
         throw new InvalidArgumentException("Unknown colour '$color' (use " . implode(', ', PROJECT_COLORS) . ').');
@@ -293,22 +298,27 @@ function save_sections(PDO $db, int $projectId, array $sections, string $by): vo
     });
 }
 
+// A MySQL UNIQUE-key violation (error 1062), e.g. two saves racing for one project or section name.
+function is_duplicate_key(Throwable $e): bool
+{
+    return $e instanceof PDOException && ($e->errorInfo[1] ?? null) === 1062;
+}
+
 // save_sections without its transaction, so add_project can run it inside its own.
 function write_sections(PDO $db, int $pid, string $project, array $sections, string $by): void
 {
     $want = [];
-    $seen = [];
     foreach (array_values($sections) as $i => $s) {
         $n = trim((string) ($s['name'] ?? ''));
         if ($n === '' || mb_strlen($n) > 60) {
             throw new InvalidArgumentException('Section name must be 1 to 60 characters.');
         }
-        if (isset($seen[mb_strtolower($n)])) {
-            throw new InvalidArgumentException("Section $n is in the list twice.");
-        }
-        $seen[mb_strtolower($n)] = true;
         $sid = $s['id'] ?? null;
-        $want[] = ['id' => $sid === null || $sid === '' ? null : (int) $sid, 'name' => $n, 'position' => $i + 1];
+        $sid = $sid === null || $sid === '' ? null : (int) $sid;
+        if ($sid !== null && $sid < 1) {
+            throw new InvalidArgumentException("Section id must be 1 or more (got $sid).");
+        }
+        $want[] = ['id' => $sid, 'name' => $n, 'position' => $i + 1];
     }
     $st = $db->prepare('SELECT s.id, s.name, s.position, (SELECT COUNT(*) FROM cards c WHERE c.section_id = s.id) AS used
         FROM sections s WHERE s.project_id = ? ORDER BY s.position, s.id FOR UPDATE');
@@ -338,8 +348,15 @@ function write_sections(PDO $db, int $pid, string $project, array $sections, str
     }
     $upd = $db->prepare('UPDATE sections SET name = ?, position = ? WHERE id = ?');
     $ins = $db->prepare('INSERT INTO sections (project_id, name, position) VALUES (?, ?, ?)');
+    // Removed rows are gone and kept ones hold placeholders, so a match is a name written earlier in this list;
+    // the column's collation decides, so "Café" and "cafe" count as the same.
+    $dup = $db->prepare('SELECT 1 FROM sections WHERE project_id = ? AND name = ?');
     $after = [];
     foreach ($want as $w) {
+        $dup->execute([$pid, $w['name']]);
+        if ($dup->fetchColumn() !== false) {
+            throw new InvalidArgumentException("A section with that name already exists ({$w['name']}).");
+        }
         if ($w['id'] !== null) {
             $upd->execute([$w['name'], $w['position'], $w['id']]);
         } else {

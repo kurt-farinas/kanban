@@ -236,11 +236,18 @@ select:focus, input:focus, textarea:focus, button:focus-visible, .card:focus-vis
 .pill[data-color="coral"] { color: #f0a084; background: rgba(216, 90, 48, 0.2); }
 .pill[data-color="pink"] { color: #f0a3c0; background: rgba(212, 83, 126, 0.2); }
 .pill[data-color="blue"] { color: #8fbdf0; background: rgba(55, 138, 221, 0.2); }
+.pill[data-color="green"] { color: #a9d77c; background: rgba(99, 153, 34, 0.22); }
+/* Gold leans olive, so it never reads as the amber stuck warning (--warn). */
+.pill[data-color="gold"] { color: #d6cc78; background: rgba(160, 146, 40, 0.24); }
+.pill[data-color="slate"] { color: #b6c1cf; background: rgba(110, 125, 145, 0.24); }
 [data-theme="light"] .pill[data-color="purple"] { color: #3c3489; background: #eeedfe; }
 [data-theme="light"] .pill[data-color="teal"] { color: #085041; background: #e1f5ee; }
 [data-theme="light"] .pill[data-color="coral"] { color: #712b13; background: #faece7; }
 [data-theme="light"] .pill[data-color="pink"] { color: #72243e; background: #fbeaf0; }
 [data-theme="light"] .pill[data-color="blue"] { color: #0c447c; background: #e6f1fb; }
+[data-theme="light"] .pill[data-color="green"] { color: #2f5410; background: #eaf3de; }
+[data-theme="light"] .pill[data-color="gold"] { color: #524a06; background: #f3f0d2; }
+[data-theme="light"] .pill[data-color="slate"] { color: #2e3a4a; background: #e8ecf1; }
 .pill.blocked { color: #fff; background: var(--danger); cursor: help; }
 
 .add-open {
@@ -612,6 +619,9 @@ button:disabled { opacity: 0.6; cursor: default; }
 .proj-dot[data-color="coral"] { background: rgb(216, 90, 48); }
 .proj-dot[data-color="pink"] { background: rgb(212, 83, 126); }
 .proj-dot[data-color="blue"] { background: rgb(55, 138, 221); }
+.proj-dot[data-color="green"] { background: rgb(99, 153, 34); }
+.proj-dot[data-color="gold"] { background: rgb(176, 160, 44); }
+.proj-dot[data-color="slate"] { background: rgb(110, 125, 145); }
 
 /* Compact rows: the date gives way to the hover actions; the chevron toggles expand/collapse. */
 .card.compact .card-actions { position: static; display: none; }
@@ -636,3 +646,22 @@ button:disabled { opacity: 0.6; cursor: default; }
 .report .report-preview { margin: 4px 0 0; color: var(--text); }
 .report .report-warn { margin: 0; padding: 6px 9px; color: var(--warn); background: var(--warn-soft); border-radius: 8px; }
 .report .confirm-actions { margin-top: 8px; }
+
+/* Projects dialog: the list, then the add/edit form with colour swatches and section rows. */
+#projects { width: min(480px, calc(100% - 40px)); }
+.projects-list-view { padding: 18px 20px; }
+.project-list, .section-rows { margin: 0 0 12px; padding: 0; list-style: none; }
+.project-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.project-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.project-count { font-size: 12px; color: var(--muted); }
+.report fieldset { margin: 0; padding: 0; border: 0; }
+.report legend { padding: 0 0 4px; }
+.report .swatches { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+.swatch { position: relative; display: flex; align-items: center; gap: 6px; padding: 3px 10px; color: var(--text); border: 1px solid var(--border); border-radius: 999px; cursor: pointer; }
+.swatch input { position: absolute; opacity: 0; pointer-events: none; }
+.swatch:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.swatch:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.section-rows { margin-bottom: 6px; }
+.section-row { display: flex; align-items: center; gap: 2px; margin-bottom: 4px; }
+.section-row input { flex: 1; min-width: 0; margin-right: 4px; }
+.section-add { align-self: flex-start; }

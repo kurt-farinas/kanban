@@ -40,6 +40,7 @@ php board.php notes <id>                  # oldest first
 php board.php plan <id> <path>            # a .md file inside the project folder
 php board.php section <id> "<name>"       # one of the card's project sections; none clears
 php board.php sections <project>          # the project's sections, in report order
+php board.php projects                    # every project: name | folder | sections
 php board.php report <project> <from> <to>  # JSON of Done and underway cards per section, dates YYYY-MM-DD
 php board.php sync                        # cards named in new verified DEPLOYMENTS.md entries go Live; prints the count
 ```
