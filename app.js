@@ -531,17 +531,114 @@ function cardEl(c) {
     return card;
 }
 
+// --- Search and quick filters: applied by paint() to the cards already loaded ---
+
+const search = document.getElementById('search');
+const quickButtons = [...document.querySelectorAll('[data-quick]')];
+const noMatch = document.getElementById('no-match');
+const FILTERS_KEY = 'kanban.filters'; // localStorage: the quick filters, per viewer
+const SEARCH_KEY = 'kanban.search'; // sessionStorage: the search text, only across an auto-reload
+const QUICK = { blocked: c => !!c.blocked, stuck: c => c.stuck_days > 0, working: isWorking };
+const quickOn = new Set((() => {
+    try {
+        const keys = JSON.parse(localStorage.getItem(FILTERS_KEY));
+        return Array.isArray(keys) ? keys.filter(k => k in QUICK) : [];
+    } catch {
+        return [];
+    }
+})());
+
+try {
+    search.value = sessionStorage.getItem(SEARCH_KEY) ?? '';
+    sessionStorage.removeItem(SEARCH_KEY);
+} catch { /* storage blocked: start empty */ }
+
+const searchWords = () => search.value.toLowerCase().split(/\s+/).filter(Boolean);
+
+// With quick filters on, a card must match one of them. Every search word must match: "21" or "#21" the id,
+// any other word (and "21") the title, project, section or status, ignoring case.
+function cardMatches(c, words) {
+    if (quickOn.size && ![...quickOn].some(k => QUICK[k](c))) return false;
+    const text = [c.title, c.project, c.section, c.status].filter(Boolean).join(' ').toLowerCase();
+    return words.every(w => {
+        const id = /^(#?)(\d+)$/.exec(w);
+        if (id && String(c.id) === id[2]) return true;
+        if (id && id[1]) return false; // "#21" means the id only
+        return text.includes(w);
+    });
+}
+
+function syncQuick() {
+    for (const b of quickButtons) b.setAttribute('aria-pressed', String(quickOn.has(b.dataset.quick)));
+    try { localStorage.setItem(FILTERS_KEY, JSON.stringify([...quickOn])); } catch { /* private mode: in-memory only */ }
+}
+
+function paint() {
+    const words = searchWords();
+    const active = words.length > 0 || quickOn.size > 0;
+    const shown = [...cards.values()].filter(c => !pendingDeletes.has(String(c.id)));
+    let visible = 0;
+    for (const section of document.querySelectorAll('.column')) {
+        const mine = shown.filter(c => c.col === section.dataset.col);
+        const hits = active ? mine.filter(c => cardMatches(c, words)) : mine;
+        visible += hits.length;
+        section.querySelector('.cards').replaceChildren(...hits.map(cardEl));
+        section.querySelector('.count').textContent = active ? `${hits.length} / ${mine.length}` : mine.length;
+    }
+    board.classList.toggle('filtering', active);
+    noMatch.hidden = !active || visible > 0;
+    noMatch.querySelector('span').textContent = words.length ? `No cards match “${search.value.trim()}”` : 'No cards match the filters';
+}
+
+let searchTimer = null;
+search.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(paint, 100);
+});
+
+search.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation(); // clears the box only; the panel and inbox Escape handlers stay out of it
+    clearTimeout(searchTimer);
+    search.value = '';
+    search.blur();
+    paint();
+});
+
+// "/" jumps to the search box unless you are typing somewhere or a popup is open.
+document.addEventListener('keydown', e => {
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+    if (e.target.closest?.('input, textarea, select, [contenteditable]') || confirmDone || reportDialog.open || openId !== null || menu) return;
+    e.preventDefault();
+    search.focus();
+    search.select();
+});
+
+for (const b of quickButtons) {
+    b.addEventListener('click', () => {
+        if (!quickOn.delete(b.dataset.quick)) quickOn.add(b.dataset.quick);
+        syncQuick();
+        paint();
+    });
+}
+
+noMatch.querySelector('button').addEventListener('click', () => {
+    search.value = '';
+    quickOn.clear();
+    syncQuick();
+    paint();
+    search.focus();
+});
+
+syncQuick();
+
 function render(data) {
     fillProjects(data.projects);
     projectInfo = new Map(data.projects.map(p => [p.name, p]));
     cards = new Map(data.cards.map(c => [String(c.id), c]));
     pruneExpanded(data.cards, filter.value === '');
-    const shown = data.cards.filter(c => !pendingDeletes.has(String(c.id)));
-    for (const section of document.querySelectorAll('.column')) {
-        const mine = shown.filter(c => c.col === section.dataset.col);
-        section.querySelector('.cards').replaceChildren(...mine.map(cardEl));
-        section.querySelector('.count').textContent = mine.length;
-    }
+    paint();
     noticeBlocks(data.cards);
     noticeWorking(data.cards);
 }
@@ -620,7 +717,10 @@ function userBusy() {
 function tryReload() {
     if (!updatePending) return;
     if (userBusy()) document.getElementById('update').hidden = false;
-    else location.reload();
+    else {
+        try { sessionStorage.setItem(SEARCH_KEY, search.value); } catch { /* the search is lost, nothing else */ }
+        location.reload();
+    }
 }
 
 function checkVersion(v) {

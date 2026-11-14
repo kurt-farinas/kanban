@@ -28,6 +28,12 @@ header('Cache-Control: no-cache');
         <label>Project
             <select id="filter"><option value="">All projects</option></select>
         </label>
+        <input type="search" id="search" class="search" placeholder="Search cards" aria-label="Search cards" autocomplete="off">
+        <div class="quick" role="group" aria-label="Show only">
+            <button type="button" class="bar-btn" data-quick="blocked" aria-pressed="false">Blocked</button>
+            <button type="button" class="bar-btn" data-quick="stuck" aria-pressed="false">Stuck</button>
+            <button type="button" class="bar-btn" data-quick="working" aria-pressed="false">Claude working</button>
+        </div>
         <button type="button" id="report-open" class="bar-btn" data-needs-db>Make report</button>
         <button type="button" id="requests-toggle" class="bar-btn" aria-expanded="false" aria-controls="requests">Requests</button>
         <button type="button" id="activity-toggle" class="bar-btn" aria-expanded="false" aria-controls="activity">Activity</button>
@@ -56,6 +62,7 @@ header('Cache-Control: no-cache');
             <div class="request-list"></div>
         </section>
     </header>
+    <p id="no-match" class="no-match" role="status" hidden><span></span> <button type="button" class="secondary">Clear</button></p>
     <main class="board">
         <?php foreach ($labels as $col => $label): ?>
             <section class="column" data-col="<?= $col ?>">

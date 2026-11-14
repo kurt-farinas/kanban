@@ -78,8 +78,9 @@ body.offline .card-actions { display: none; }
 .topbar {
     position: relative;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 16px;
+    gap: 10px 16px;
     padding: 12px 20px;
     background: var(--bar);
     border-bottom: 1px solid var(--border);
@@ -107,6 +108,13 @@ body.offline .card-actions { display: none; }
 #report-open { margin-left: auto; }
 
 .bar-btn:hover, .bar-btn[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
+
+/* Search and quick filters; a pressed filter is filled so a remembered one is never missed. */
+.search { width: 180px; }
+.quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.bar-btn[aria-pressed="true"] { color: #fff; background: var(--accent); border-color: var(--accent); }
+.bar-btn[aria-pressed="true"]:hover { color: #fff; background: var(--accent-hover); }
+.no-match { display: flex; align-items: center; gap: 10px; margin: 0; padding: 14px 20px 0; color: var(--muted); }
 
 select, input, textarea, button { font: inherit; }
 
@@ -466,6 +474,8 @@ textarea { resize: vertical; }
     border: 1px dashed var(--border);
     border-radius: 10px;
 }
+
+.board.filtering .cards:empty::before { content: "No matches"; }
 
 /* Toasts: bottom-right; user = neutral gray, claude = clay, error = red and stays until closed. */
 .toasts {
