@@ -1056,9 +1056,12 @@ function copy_backup(string $file, string $dir, int $keep = 7): string
         throw new RuntimeException("Can't create the backup copy folder $dir.");
     }
     $dest = $dir . DIRECTORY_SEPARATOR . basename($file);
-    if (!copy($file, "$dest.tmp") || !rename("$dest.tmp", $dest)) {
-        @unlink("$dest.tmp");
-        throw new RuntimeException("Could not copy $file to $dir.");
+    $tmp = "$dest." . getmypid() . '.tmp'; // two runs at once (Stop hooks) must not share a temp file
+    if (!@copy($file, $tmp) || !@rename($tmp, $dest)) {
+        @unlink($tmp);
+        if (!is_file($dest)) { // the other run may have finished the same copy
+            throw new RuntimeException("Could not copy $file to $dir.");
+        }
     }
     prune_backups($dir, $keep);
     return $dest;
@@ -1081,7 +1084,9 @@ function backup_if_due(PDO $db): bool
 {
     $today = $db->query('SELECT CURDATE()')->fetchColumn();
     $copy = backup_copy_dir();
-    $done = is_file(backup_dir() . "/kanban-$today.sql") && ($copy === null || is_file("$copy/kanban-$today.sql"));
+    // A copy that failed today is not retried on every Stop: board.php writes the date to copy-failed.txt; 5 PM and login retry.
+    $copyDone = $copy === null || is_file("$copy/kanban-$today.sql") || @file_get_contents(backup_dir() . '/copy-failed.txt') === $today;
+    $done = is_file(backup_dir() . "/kanban-$today.sql") && $copyDone;
     if ($done || getenv('KANBAN_NO_NOTIFY') !== false) {
         return false;
     }

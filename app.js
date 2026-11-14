@@ -381,11 +381,13 @@ function fillProjects(projects) {
     const names = projects.map(p => p.name);
     if (filledNames === names.join('\n')) return;
     filledNames = names.join('\n');
+    const keepFilled = editForm.elements.project.value === filledProject; // a rename must not look like Claude's change
     for (const select of [filter, projectSelect, editForm.elements.project, requestForm.elements.project]) {
         const i = select.selectedIndex;
         select.replaceChildren(...(select === filter ? [new Option('All projects', '')] : []), ...names.map(n => new Option(n, n)));
         select.selectedIndex = Math.max(i, 0);
     }
+    if (keepFilled) filledProject = editForm.elements.project.value;
     fillSections(addForm.elements.section, projectSelect.value, addForm.elements.section.value);
 }
 
@@ -1202,6 +1204,7 @@ editForm.addEventListener('submit', async e => {
     try {
         await busy(editForm.querySelector('button[type=submit]'), (async () => {
             await api({ a: 'edit', id, title, project: f.project.value, was_title: filledTitle, was_project: filledProject }, true);
+            [filledTitle, filledProject] = [title, f.project.value]; // a quick second save must not conflict with this one
             // edit clears the section when the project changes, so compare with what the server now holds.
             const now = sameProject ? before : '';
             if (f.section.value !== now) await api({ a: 'section', id, section: f.section.value }, true);

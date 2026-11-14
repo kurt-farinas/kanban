@@ -35,7 +35,7 @@ header('Cache-Control: no-cache');
             <button type="button" class="bar-btn" data-quick="working" aria-pressed="false">Claude working</button>
         </div>
         <span id="backup-warn" class="bar-warn" hidden role="status"></span>
-        <button type="button" id="report-open"class="bar-btn" data-needs-db>Make report</button>
+        <button type="button" id="report-open" class="bar-btn" data-needs-db>Make report</button>
         <button type="button" id="projects-open" class="bar-btn" data-needs-db>Projects</button>
         <button type="button" id="requests-toggle" class="bar-btn" aria-expanded="false" aria-controls="requests">Requests</button>
         <button type="button" id="activity-toggle" class="bar-btn" aria-expanded="false" aria-controls="activity">Activity</button>

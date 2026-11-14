@@ -805,6 +805,18 @@ $tests = [
         move_card($db, $id, 'building', 'claude');
         edit_card($db, $id, 'X', 'Alpha', 'user', 'A2', 'Alpha');
         ok(get_card($db, $id)['title'] === 'X', 'a move made a current edit conflict');
+        add_note($db, $id, 'claude note', 'claude');
+        edit_card($db, $id, 'Y', 'Alpha', 'user', 'X', 'Alpha');
+        ok(get_card($db, $id)['title'] === 'Y', 'a note made a current edit conflict');
+        edit_card($db, $id, 'Y', 'Beta', 'claude');
+        $refused = false;
+        try {
+            edit_card($db, $id, 'Z', 'Alpha', 'user', 'Y', 'Alpha');
+        } catch (CardConflict) {
+            $refused = true;
+        }
+        ok($refused, 'a project change by Claude was not caught');
+        ok(get_card($db, $id)['project'] === 'Beta', 'stale edit moved the project back');
     },
     'report_cards_grouping' => function (PDO $db) {
         $pid = project_id($db, 'Gamma');
@@ -1001,7 +1013,8 @@ $tests = [
         @mkdir($src);
         file_put_contents("$src/kanban-2026-11-09.sql", 'X');
         try {
-            mkdir($dir);
+            $first = copy_backup("$src/kanban-2026-11-09.sql", $dir, 7);
+            ok(is_file($first), 'copy_backup did not create the folder');
             for ($i = 1; $i <= 8; $i++) {
                 file_put_contents("$dir/kanban-2026-11-0$i.sql", 'old');
             }

@@ -51,6 +51,7 @@ if ($cmd === 'backup') {
         try {
             echo 'Copied to ', copy_backup($file, $copy), "\n";
         } catch (Throwable $e) {
+            @file_put_contents(backup_dir() . DIRECTORY_SEPARATOR . 'copy-failed.txt', $today); // backup_if_due: no retry on every Stop
             notify('Kanban backup copy failed', $e->getMessage());
             fwrite(STDERR, $e->getMessage() . "\n");
             exit(1);
