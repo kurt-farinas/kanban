@@ -22,6 +22,7 @@ let dragged = false; // a drag started since the last mousedown, so the click is
 let seq = 0; // only the newest list response renders
 let openId = null; // card shown in the details panel
 let openCard = null;
+let filledSection = ''; // the section the edit form was last filled with; the 10s poll must not change it
 let blockedIds = null; // blocked card ids at the last poll; null = record silently
 let unseenBlocks = 0;
 let workingIds = null; // card ids with the working dot at the last render; null = record silently
@@ -382,7 +383,8 @@ let projectInfo = new Map(); // name -> {name, color, folder, site_name, section
 
 // Fills a section dropdown with that project's sections; hidden for a project without any.
 function fillSections(select, project, value = '') {
-    const names = projectInfo.get(project)?.sections ?? [];
+    const names = [...(projectInfo.get(project)?.sections ?? [])];
+    if (value && !names.includes(value)) names.push(value); // a poll hasn't caught up with a new section yet
     select.replaceChildren(new Option('No section', ''), ...names.map(n => new Option(n, n)));
     select.value = names.includes(value) ? value : '';
     select.hidden = names.length === 0;
@@ -464,19 +466,22 @@ function cardEl(c) {
         dot.title = c.project;
         const line = el('span', 'title-line', c.title);
         line.title = c.title;
-        card.append(dot, el('span', 'card-id', `#${c.id}`), line);
+        // Two short lines: the title gets the whole top row, details sit underneath.
+        const meta = el('div', 'compact-meta');
+        meta.append(el('span', 'card-id', `#${c.id}`));
         if (c.section) {
             const s = el('span', 'pill section-pill', c.section);
             s.title = c.section;
-            card.append(s);
+            meta.append(s);
         }
         if (c.blocked) {
             const b = el('span', 'blocked-mini');
             b.title = `Blocked: ${c.blocked_reason || ''}`;
-            card.append(b);
+            meta.append(b);
         }
-        if (c.live_at) card.append(el('span', 'live-since', shortDate(c.live_at)));
-        card.append(liveToggle(c, false), actionsEl(c));
+        if (c.live_at) meta.append(el('span', 'live-since', shortDate(c.live_at)));
+        meta.append(actionsEl(c));
+        card.append(dot, line, liveToggle(c, false), meta);
         return card;
     }
     if (c.stuck_days > 0) card.classList.add('stuck');
@@ -976,7 +981,7 @@ async function showCard(fill, select = false) {
     if (fill) {
         editForm.elements.title.value = c.title;
         editForm.elements.project.value = c.project;
-        fillSections(editForm.elements.section, c.project, c.section ?? '');
+        fillSections(editForm.elements.section, c.project, filledSection = c.section ?? '');
         if (select && !panel.hidden) editForm.elements.title.select();
     }
     panel.querySelector('.working').hidden = !isWorking(c);
@@ -1036,12 +1041,13 @@ editForm.addEventListener('submit', async e => {
     }
     const f = editForm.elements;
     const id = openId;
-    const before = openCard;
+    const before = filledSection;
+    const sameProject = openCard && openCard.project === f.project.value;
     try {
         await busy(editForm.querySelector('button[type=submit]'), (async () => {
             await api({ a: 'edit', id, title, project: f.project.value }, true);
             // edit clears the section when the project changes, so compare with what the server now holds.
-            const now = before && before.project === f.project.value ? before.section ?? '' : '';
+            const now = sameProject ? before : '';
             if (f.section.value !== now) await api({ a: 'section', id, section: f.section.value }, true);
         })());
         toast('Card saved');

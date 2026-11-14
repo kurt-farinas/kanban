@@ -583,12 +583,15 @@ button:disabled { opacity: 0.6; cursor: default; }
 .request-actions input { flex: 1; min-width: 0; }
 
 /* Stuck: idle 3+ days in a work column. */
-.card.stuck, .card.stuck:hover { border-left: 3px solid var(--warn); }
+.card.stuck, .card.stuck:hover { border-color: var(--warn); }
 .pill.stuck { color: var(--warn); background: var(--warn-soft); cursor: help; }
 
 /* Compact Live row; click expands to the full card. */
-.card.compact { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
-.card.compact .title-line { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.card.compact { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 6px 10px; }
+.card.compact .title-line { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.card.compact .compact-meta { flex: 1 0 100%; display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 16px; }
+.card.compact .compact-meta .live-since, .card.compact .compact-meta .card-actions { margin-left: auto; }
+.card.compact:hover .live-since, .card.compact:focus-within .live-since { display: none; }
 .card.compact .card-id, .card.compact .live-since { flex: none; font-size: 12px; color: var(--muted); }
 .proj-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .proj-dot[data-color="purple"] { background: rgb(127, 119, 221); }
@@ -600,16 +603,15 @@ button:disabled { opacity: 0.6; cursor: default; }
 /* Compact rows: the date gives way to the hover actions; the chevron toggles expand/collapse. */
 .card.compact .card-actions { position: static; display: none; }
 .card.compact:hover .card-actions, .card.compact:focus-within .card-actions { display: flex; }
-.card.compact:hover .live-since, .card.compact:focus-within .live-since { display: none; }
 .card.compact .blocked-mini { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); cursor: help; }
 .live-toggle { flex: none; padding: 0 4px; font-size: 14px; line-height: 1; color: var(--muted); background: none; border: 0; cursor: pointer; }
 .live-toggle:hover { color: var(--text); }
 .card:not(.compact) .live-toggle { position: absolute; top: 8px; right: 62px; }
-@media (hover: none) { .card.compact .card-actions { display: flex; } .card.compact .live-since { display: none; } }
+@media (hover: none) { .card.compact .card-actions { display: flex; } }
 
 /* Section pill: neutral outline, so it never reads as a project color. */
 .section-pill { padding: 0 7px; color: var(--text); background: none; border: 1px solid var(--border); }
-.card.compact .section-pill { flex: 0 1 auto; min-width: 0; max-width: 90px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.card.compact .section-pill { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; }
 
 /* Make report dialog: native <dialog> wearing the confirm popup look; the form carries the padding so a click on the backdrop is the only click on the dialog itself. */
 .report { padding: 0; color: var(--text); }

@@ -103,7 +103,7 @@ try {
         case 'report_preview':
             $r = report_cards($db, $_GET['project'] ?? '', $_GET['from'] ?? '', $_GET['to'] ?? '');
             $count = fn(array $groups, string $k) => array_sum(array_map(fn($g) => count($g[$k]), $groups));
-            $other = array_filter($r['sections'], fn($g) => $g['name'] === 'Other changes'); // report_cards' group for cards with no section
+            $other = array_filter($r['sections'], fn($g) => $g['other']); // report_cards' group for cards with no section
             out(['done' => $count($r['sections'], 'done'), 'underway' => $count($r['sections'], 'underway'),
                 'no_section' => $count($other, 'done') + $count($other, 'underway')]);
         case 'delete':

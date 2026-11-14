@@ -213,9 +213,9 @@ function report_cards(PDO $db, string $project, string $from, string $to): array
     $p = $st->fetch();
     $groups = [];
     foreach (list_sections($db, $p['name']) as $s) {
-        $groups[(int) $s['id']] = ['name' => $s['name'], 'done' => [], 'underway' => []];
+        $groups[(int) $s['id']] = ['name' => $s['name'], 'other' => false, 'done' => [], 'underway' => []];
     }
-    $groups[0] = ['name' => 'Other changes', 'done' => [], 'underway' => []];
+    $groups[0] = ['name' => 'Other changes', 'other' => true, 'done' => [], 'underway' => []];
 
     $in = implode(',', array_fill(0, count(REPORT_UNDERWAY), '?'));
     $st = $db->prepare("SELECT id, title, col, live_at, section_id FROM cards
