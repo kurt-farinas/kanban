@@ -1,4 +1,4 @@
-// Board page. All user text goes in via textContent / DOM properties, never innerHTML.
+// Board page. All user and file text goes in via textContent / DOM properties, never innerHTML.
 const banner = document.getElementById('error');
 const filter = document.getElementById('filter');
 const addForm = document.getElementById('add');
@@ -6,10 +6,24 @@ const addOpen = document.getElementById('add-open');
 const titleInput = addForm.elements.title;
 const projectSelect = addForm.elements.project;
 const titleError = addForm.querySelector('.field-error');
+const panel = document.getElementById('panel');
+const overlay = document.getElementById('overlay');
+const editForm = document.getElementById('edit');
+const noteForm = document.getElementById('note');
+const activity = document.getElementById('activity');
+const activityToggle = document.getElementById('activity-toggle');
+const LABELS = Object.fromEntries([...document.querySelectorAll('.column')]
+    .map(s => [s.dataset.col, s.querySelector('h2').firstChild.textContent.trim()]));
+const WORKING_MS = 30 * 60 * 1000; // a dot older than this without a refresh is a crashed session
 let cards = new Map(); // id -> card row from the last render
 let dragging = null; // card element being dragged
 let dropped = false;
+let dragged = false; // a drag started since the last mousedown, so the click is not a panel open
 let seq = 0; // only the newest list response renders
+let openId = null; // card shown in the details panel
+let openCard = null;
+let blockedIds = null; // blocked card ids at the last poll; null = record silently
+let unseenBlocks = 0;
 
 async function api(params, post = false) {
     let res, data;
@@ -37,19 +51,157 @@ function el(tag, className, text) {
     return e;
 }
 
+// MySQL "YYYY-MM-DD HH:MM:SS" in server local time; the browser runs on the same PC.
+const parseTime = ts => new Date(ts.replace(' ', 'T')).getTime();
+
+function ago(ts) {
+    const s = Math.max(0, (Date.now() - parseTime(ts)) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    return `${Math.floor(s / 86400)} d ago`;
+}
+
+const isWorking = c => !!c.working_since && Date.now() - parseTime(c.working_since) < WORKING_MS;
+const who = author => author === 'claude' ? 'Claude' : 'You';
+
+// --- Markdown: a small subset, built as DOM nodes. Anything else stays plain text. ---
+
+const INLINE = /`([^`]+)`|\*\*(.+?)\*\*|\[([^\]]+)\]\(([^)\s]+)\)/g;
+const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+function inline(text) {
+    const out = [];
+    let last = 0;
+    for (const m of text.matchAll(INLINE)) {
+        out.push(text.slice(last, m.index));
+        last = m.index + m[0].length;
+        if (m[1] !== undefined) {
+            out.push(el('code', '', m[1]));
+        } else if (m[2] !== undefined) {
+            const b = document.createElement('strong');
+            b.append(...inline(m[2]));
+            out.push(b);
+        } else if (/^https?:\/\//i.test(m[4])) {
+            const a = el('a', '', m[3]);
+            a.href = m[4];
+            a.target = '_blank';
+            a.rel = 'noopener';
+            out.push(a);
+        } else {
+            out.push(m[0]); // non-http link: shown as typed
+        }
+    }
+    out.push(text.slice(last));
+    return out;
+}
+
+const cells = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(s => s.trim());
+
+function md(src) {
+    const out = document.createDocumentFragment();
+    const lines = src.replace(/\r\n?/g, '\n').split('\n');
+    let para = [];
+    let list = null;
+    const flush = () => {
+        if (para.length) {
+            const p = document.createElement('p');
+            p.append(...inline(para.join(' ')));
+            out.append(p);
+            para = [];
+        }
+        list = null;
+    };
+    const row = (line, tag) => {
+        const tr = document.createElement('tr');
+        for (const cell of cells(line)) {
+            const td = document.createElement(tag);
+            td.append(...inline(cell));
+            tr.append(td);
+        }
+        return tr;
+    };
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        let m;
+        if (/^\s*```/.test(line)) {
+            flush();
+            const code = [];
+            while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
+            const pre = document.createElement('pre');
+            pre.append(el('code', '', code.join('\n')));
+            out.append(pre);
+        } else if ((m = /^(#{1,3})\s+(.*)$/.exec(line))) {
+            flush();
+            const h = document.createElement('h' + (m[1].length + 3)); // panel already uses h2/h3
+            h.append(...inline(m[2]));
+            out.append(h);
+        } else if (/^\s*\|/.test(line) && TABLE_SEP.test(lines[i + 1] || '')) {
+            flush();
+            const table = document.createElement('table');
+            const head = document.createElement('thead');
+            const body = document.createElement('tbody');
+            head.append(row(line, 'th'));
+            i++; // separator
+            while (/^\s*\|/.test(lines[i + 1] || '')) body.append(row(lines[++i], 'td'));
+            table.append(head, body);
+            out.append(table);
+        } else if ((m = /^\s*([-*]|\d+[.)])\s+(.*)$/.exec(line))) {
+            if (para.length) flush();
+            const tag = /\d/.test(m[1]) ? 'OL' : 'UL';
+            if (!list || list.tagName !== tag) {
+                list = document.createElement(tag);
+                out.append(list);
+            }
+            const li = document.createElement('li');
+            const box = /^\[([ xX])\]\s+(.*)$/.exec(m[2]);
+            if (box) {
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.disabled = true;
+                cb.checked = box[1] !== ' ';
+                li.className = 'task';
+                li.append(cb, ' ', ...inline(box[2]));
+            } else {
+                li.append(...inline(m[2]));
+            }
+            list.append(li);
+        } else if (line.trim() === '') {
+            flush();
+        } else {
+            list = null;
+            para.push(line.trim());
+        }
+    }
+    flush();
+    return out;
+}
+
+// --- Board ---
+
 function fillProjects(projects) {
     if (filter.options.length > 1) return;
     for (const p of projects) {
         filter.add(new Option(p.name, p.name));
         projectSelect.add(new Option(p.name, p.name));
+        editForm.elements.project.add(new Option(p.name, p.name));
     }
 }
 
 function cardEl(c) {
     const card = el('article', 'card');
     card.draggable = true;
+    card.tabIndex = 0;
     card.dataset.id = c.id;
-    card.append(el('div', 'title', c.title));
+    const title = el('div', 'title');
+    if (isWorking(c)) {
+        const dot = el('span', 'dot');
+        dot.title = 'Claude is working on this';
+        title.append(dot);
+    }
+    title.append(c.title);
+    card.append(title);
+    if (c.status) card.append(el('div', 'status', c.status));
     const tags = el('div', 'tags');
     const pill = el('span', 'pill', c.project);
     pill.dataset.color = c.color;
@@ -58,6 +210,11 @@ function cardEl(c) {
         const b = el('span', 'pill blocked', 'Blocked');
         b.title = c.blocked_reason || '';
         tags.append(b);
+    }
+    if (c.note_count > 0) {
+        const n = el('span', 'note-count', `✎ ${c.note_count}`);
+        n.title = c.note_count === 1 ? '1 note' : `${c.note_count} notes`;
+        tags.append(n);
     }
     card.append(tags);
     return card;
@@ -71,7 +228,49 @@ function render(data) {
         section.querySelector('.cards').replaceChildren(...mine.map(cardEl));
         section.querySelector('.count').textContent = mine.length;
     }
+    noticeBlocks(data.cards);
 }
+
+// --- Blocked alerts: tab title + beep for cards blocked since the last poll ---
+
+function noticeBlocks(list) {
+    const now = new Set(list.filter(c => c.blocked).map(c => c.id));
+    const fresh = blockedIds ? [...now].filter(id => !blockedIds.has(id)).length : 0;
+    blockedIds = now;
+    if (!fresh) return;
+    unseenBlocks += fresh;
+    document.title = `(${unseenBlocks}) Kanban`;
+    beep();
+}
+
+function seen() {
+    if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
+    unseenBlocks = 0;
+    document.title = 'Kanban';
+}
+
+let audio = null; // one context for the page; a new one per beep piles up when autoplay keeps them suspended
+
+function beep() {
+    try {
+        const ctx = audio ??= new AudioContext();
+        ctx.resume().catch(() => {});
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.3);
+    } catch {
+        // Audio blocked or unsupported: the title change still shows.
+    }
+}
+
+window.addEventListener('focus', seen);
+document.addEventListener('visibilitychange', seen);
+document.addEventListener('pointerdown', seen);
 
 async function load() {
     const my = ++seq;
@@ -93,21 +292,39 @@ function dropPosition() {
     return next.position - (sameCol && moved.position < next.position ? 1 : 0);
 }
 
-document.querySelector('.board').addEventListener('dragstart', e => {
+const board = document.querySelector('.board');
+
+board.addEventListener('mousedown', () => { dragged = false; });
+
+board.addEventListener('dragstart', e => {
     const card = e.target.closest('.card');
     if (!card) return;
     dragging = card;
     dropped = false;
+    dragged = true;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', card.dataset.id);
     card.classList.add('dragging');
 });
 
-document.querySelector('.board').addEventListener('dragend', () => {
+board.addEventListener('dragend', () => {
     if (!dragging) return;
     dragging.classList.remove('dragging');
     dragging = null;
     if (!dropped) load(); // cancelled: undo the preview
+});
+
+board.addEventListener('click', e => {
+    const card = e.target.closest('.card');
+    if (card && !dragged) openPanel(card.dataset.id);
+});
+
+board.addEventListener('keydown', e => {
+    const card = e.target.closest('.card');
+    if (card && e.target === card && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        openPanel(card.dataset.id);
+    }
 });
 
 for (const section of document.querySelectorAll('.column')) {
@@ -136,7 +353,10 @@ for (const section of document.querySelectorAll('.column')) {
     });
 }
 
-filter.addEventListener('change', load);
+filter.addEventListener('change', () => {
+    blockedIds = null; // other cards come into view; they are not new blocks
+    load();
+});
 
 addOpen.addEventListener('click', () => {
     addForm.hidden = false;
@@ -161,5 +381,205 @@ addForm.addEventListener('submit', async e => {
     }
 });
 
+// --- Details panel ---
+
+const planLink = c => 'claude://code/new?prompt='
+    + encodeURIComponent(`Update the plan for card #${c.id} (${c.project}): `)
+    + '&folder=' + encodeURIComponent(c.folder);
+
+function openPanel(id) {
+    openId = String(id);
+    openCard = null;
+    editForm.querySelector('.field-error').hidden = true;
+    noteForm.querySelector('.field-error').hidden = true;
+    noteForm.elements.body.value = '';
+    // Blank the last card's details so they never show under the new heading while loading.
+    document.getElementById('panel-heading').textContent = `Card #${id}`;
+    editForm.elements.title.value = '';
+    panel.querySelector('.panel-status').textContent = '';
+    panel.querySelector('.working').hidden = true;
+    panel.querySelector('.notes').replaceChildren();
+    panel.querySelector('.plan').replaceChildren();
+    panel.hidden = overlay.hidden = false;
+    panel.querySelector('.close').focus();
+    showCard(true);
+}
+
+function closePanel() {
+    if (openId === null) return;
+    const id = openId;
+    openId = openCard = null;
+    panel.hidden = overlay.hidden = true;
+    const card = board.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+    if (card) card.focus();
+}
+
+// fill = also reset the edit form (on open and after a save), so a poll never wipes typing.
+async function showCard(fill) {
+    const id = openId;
+    let data;
+    try {
+        data = await api({ a: 'card', id });
+    } catch (e) {
+        if (id === openId) {
+            closePanel();
+            showError(e);
+        }
+        return;
+    }
+    if (id !== openId) return;
+    const c = openCard = data.card;
+    document.getElementById('panel-heading').textContent = `Card #${c.id}`;
+    if (fill) {
+        editForm.elements.title.value = c.title;
+        editForm.elements.project.value = c.project;
+    }
+    panel.querySelector('.working').hidden = !isWorking(c);
+    const status = [LABELS[c.col] || c.col];
+    if (c.blocked) status.push(`Blocked: ${c.blocked_reason || ''}`);
+    if (c.status) status.push(c.status);
+    panel.querySelector('.panel-status').textContent = status.join(' · ');
+    panel.querySelector('.notes').replaceChildren(...(data.notes.length ? data.notes.map(noteEl)
+        : [el('li', 'empty', 'No notes yet.')]));
+    let plan;
+    try {
+        plan = md((await api({ a: 'plan', id })).markdown);
+    } catch (e) {
+        plan = el('p', 'empty', e.message); // 404 says "No plan yet"
+    }
+    if (id === openId) panel.querySelector('.plan').replaceChildren(plan);
+}
+
+function noteEl(n) {
+    const li = el('li', 'note');
+    const head = el('div', 'note-head');
+    head.append(el('span', `badge ${n.author}`, who(n.author)));
+    const time = el('time', '', ago(n.created_at));
+    time.title = n.created_at;
+    head.append(time);
+    li.append(head, el('p', 'note-body', n.body));
+    return li;
+}
+
+panel.querySelector('.close').addEventListener('click', closePanel);
+overlay.addEventListener('click', closePanel);
+
+document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (openId !== null) closePanel();
+    else if (!activity.hidden) toggleActivity(false);
+});
+
+editForm.elements.title.addEventListener('input', () => { editForm.querySelector('.field-error').hidden = true; });
+
+editForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const title = editForm.elements.title.value;
+    if (title.trim() === '') {
+        editForm.querySelector('.field-error').hidden = false;
+        return;
+    }
+    try {
+        await api({ a: 'edit', id: openId, title, project: editForm.elements.project.value }, true);
+        showCard(true);
+        refresh();
+    } catch (err) {
+        showError(err);
+    }
+});
+
+noteForm.elements.body.addEventListener('input', () => { noteForm.querySelector('.field-error').hidden = true; });
+
+noteForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = noteForm.elements.body.value;
+    if (body.trim() === '') {
+        noteForm.querySelector('.field-error').hidden = false;
+        return;
+    }
+    try {
+        await api({ a: 'note', id: openId, body }, true);
+        noteForm.elements.body.value = '';
+        showCard(false);
+        refresh();
+    } catch (err) {
+        showError(err);
+    }
+});
+
+document.getElementById('plan-btn').addEventListener('click', () => {
+    if (openCard) window.location.href = planLink(openCard);
+});
+
+document.getElementById('delete').addEventListener('click', async () => {
+    const id = openId;
+    if (!confirm(`Delete card #${id}? This can't be undone.`)) return;
+    try {
+        await api({ a: 'delete', id }, true);
+        closePanel();
+        refresh();
+    } catch (err) {
+        showError(err);
+    }
+});
+
+// --- Activity ---
+
+function eventText(e) {
+    const n = `#${e.card_id}`;
+    switch (e.action) {
+        case 'added': return `added ${n} to ${e.detail}`;
+        case 'moved': {
+            const [from, to] = e.detail.split(' → ');
+            return from === to ? `reordered ${n} in ${LABELS[to] || to}` : `moved ${n} to ${LABELS[to] || to}`;
+        }
+        case 'blocked': return `blocked ${n}: ${e.detail}`;
+        case 'unblocked': return `unblocked ${n}`;
+        case 'edited': return `edited ${n}`;
+        case 'deleted': return `deleted ${n}`;
+        case 'note': return `added a note to ${n}`;
+        case 'plan': return `set the plan for ${n}`;
+        default: return `${e.action} ${n}`;
+    }
+}
+
+function eventEl(e) {
+    const li = el('li', 'event');
+    const line = el('div', '');
+    line.append(el('span', `badge ${e.author}`, who(e.author)), ` ${eventText(e)}`);
+    const time = el('time', '', ` · ${ago(e.created_at)}`);
+    time.title = e.created_at;
+    line.append(time);
+    li.append(line, el('div', 'event-title', e.card_title));
+    return li;
+}
+
+async function loadEvents() {
+    try {
+        const { events } = await api({ a: 'events' });
+        activity.querySelector('.events').replaceChildren(...(events.length ? events.map(eventEl)
+            : [el('li', 'empty', 'Nothing yet.')]));
+    } catch (e) {
+        showError(e);
+    }
+}
+
+function toggleActivity(open = activity.hidden) {
+    activity.hidden = !open;
+    activityToggle.setAttribute('aria-expanded', open);
+    if (open) loadEvents();
+}
+
+activityToggle.addEventListener('click', () => toggleActivity());
+
+function refresh() {
+    load();
+    if (!activity.hidden) loadEvents();
+}
+
 load();
-setInterval(() => { if (!dragging) load(); }, 10000);
+setInterval(() => {
+    if (dragging) return;
+    refresh();
+    if (openId !== null) showCard(false);
+}, 10000);
