@@ -68,7 +68,7 @@ header('Cache-Control: no-cache');
     <main class="board">
         <?php foreach ($labels as $col => $label): ?>
             <section class="column" data-col="<?= $col ?>">
-                <h2><?= $label ?> <span class="count">0</span></h2>
+                <h2><button type="button" class="col-toggle" aria-expanded="true" tabindex="-1"><?= $label ?> <span class="count">0</span></button></h2>
                 <div class="cards"></div>
                 <?php if ($col === 'todo'): ?>
                     <button type="button" id="add-open" class="add-open" data-needs-db>+ Add card</button>

@@ -181,6 +181,33 @@ select:focus, input:focus, textarea:focus, button:focus-visible, .card:focus-vis
 
 .cards { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
 
+/* Column header button: a plain heading on desktop, a fold toggle below 900px. */
+.col-toggle {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 8px;
+    padding: 0;
+    color: inherit;
+    text-align: left;
+    background: none;
+    border: 0;
+    cursor: default;
+}
+
+.col-toggle .count { margin-left: auto; }
+
+@media (max-width: 899px) {
+    .board { grid-template-columns: minmax(0, 1fr); padding: 14px; overflow-x: visible; }
+    .column { min-height: auto; }
+    .col-toggle { cursor: pointer; }
+    .col-toggle::before { content: "\25BE"; color: var(--muted); transition: transform 0.15s; }
+    .column.folded .col-toggle::before { transform: rotate(-90deg); }
+    .column.folded > :not(h2) { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) { .col-toggle::before { transition: none; } }
+
 /* Shown while a card is dragged over a column whose move opens Claude. */
 .column.drop-claude { border-color: var(--accent); }
 

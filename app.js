@@ -13,7 +13,7 @@ const noteForm = document.getElementById('note');
 const activity = document.getElementById('activity');
 const activityToggle = document.getElementById('activity-toggle');
 const LABELS = Object.fromEntries([...document.querySelectorAll('.column')]
-    .map(s => [s.dataset.col, s.querySelector('h2').firstChild.textContent.trim()]));
+    .map(s => [s.dataset.col, s.querySelector('.col-toggle').firstChild.textContent.trim()]));
 const WORKING_MS = 30 * 60 * 1000; // a dot older than this without a refresh is a crashed session
 let cards = new Map(); // id -> card row from the last render
 let dragging = null; // card element being dragged
@@ -602,7 +602,46 @@ function paint() {
     board.classList.toggle('filtering', active);
     noMatch.hidden = !active || visible > 0;
     noMatch.querySelector('span').textContent = words.length ? `No cards match “${search.value.trim()}”` : 'No cards match the filters';
+    applyFolds();
 }
+
+// --- Narrow screens: each column folds under its header. Empty columns and Live start folded; a viewer's
+// own fold or unfold per column is kept and wins. A search or filter shows every column open. ---
+
+const narrow = matchMedia('(max-width: 899px)');
+const FOLDED_KEY = 'kanban.folded'; // localStorage: col -> true (folded) / false (open), per viewer
+const folded = (() => {
+    try {
+        const map = JSON.parse(localStorage.getItem(FOLDED_KEY));
+        return map && typeof map === 'object' ? map : {};
+    } catch {
+        return {};
+    }
+})();
+
+function applyFolds() {
+    const filtering = board.classList.contains('filtering');
+    for (const section of document.querySelectorAll('.column')) {
+        const col = section.dataset.col;
+        const shut = narrow.matches && !filtering && !section.classList.contains('peek')
+            && (folded[col] ?? (col === 'live' || !section.querySelector('.cards').children.length));
+        section.classList.toggle('folded', shut);
+        const toggle = section.querySelector('.col-toggle');
+        toggle.tabIndex = narrow.matches ? 0 : -1; // on desktop it is a plain heading
+        toggle.setAttribute('aria-expanded', String(!shut));
+    }
+}
+
+for (const toggle of document.querySelectorAll('.col-toggle')) {
+    toggle.addEventListener('click', () => {
+        if (!narrow.matches || board.classList.contains('filtering')) return;
+        const section = toggle.closest('.column');
+        folded[section.dataset.col] = !section.classList.contains('folded');
+        try { localStorage.setItem(FOLDED_KEY, JSON.stringify(folded)); } catch { /* private mode: in-memory only */ }
+        applyFolds();
+    });
+}
+narrow.addEventListener('change', applyFolds);
 
 let searchTimer = null;
 search.addEventListener('input', () => {
@@ -635,8 +674,8 @@ document.addEventListener('keydown', e => {
         e.preventDefault();
         document.getElementById('add-open').click();
     } else if (e.key === 'j' || e.key === 'k') {
-        // paint() only renders cards that pass search and filters, so every .card in the DOM is visible.
-        const all = [...document.querySelectorAll('.card')];
+        // paint() only renders cards that pass search and filters, so every .card outside a folded column is visible.
+        const all = [...document.querySelectorAll('.column:not(.folded) .card')];
         const i = all.indexOf(cardNow);
         all[i < 0 ? 0 : Math.max(0, Math.min(all.length - 1, i + (e.key === 'j' ? 1 : -1)))]?.focus();
     } else if (/^[1-6]$/.test(e.key) && cardNow) {
@@ -923,6 +962,8 @@ board.addEventListener('dragend', () => {
     if (!dragging) return;
     dragging.classList.remove('dragging');
     dragging = null;
+    for (const s of document.querySelectorAll('.column.peek')) s.classList.remove('peek');
+    applyFolds();
     if (!dropped) load(); // cancelled: undo the preview
 });
 
@@ -1040,6 +1081,10 @@ for (const section of document.querySelectorAll('.column')) {
     section.addEventListener('dragover', e => {
         if (!dragging) return;
         e.preventDefault();
+        if (section.classList.contains('folded')) { // open it for this drag only, not as the viewer's choice
+            section.classList.add('peek');
+            applyFolds();
+        }
         showHint(section);
         const before = [...list.children].find(c => c !== dragging
             && e.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
