@@ -672,6 +672,9 @@ document.addEventListener('keydown', e => {
         search.select();
     } else if (e.key === 'n') {
         e.preventDefault();
+        if (document.querySelector('.column[data-col="todo"]').classList.contains('folded')) {
+            document.querySelector('.column[data-col="todo"] .col-toggle').click(); // the add form lives in To do
+        }
         document.getElementById('add-open').click();
     } else if (e.key === 'j' || e.key === 'k') {
         // paint() only renders cards that pass search and filters, so every .card outside a folded column is visible.
