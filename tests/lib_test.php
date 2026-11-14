@@ -104,6 +104,39 @@ function link_session(PDO $db, string $session, int $card, string $linked): void
     $db->prepare('INSERT INTO chat_links (card_id, session_id, linked_at) VALUES (?, ?, ?)')->execute([$card, $session, $linked]);
 }
 
+// Runs $fn, then drops every project added beyond the four seeded ones, with their cards and sections.
+function with_new_projects(PDO $db, callable $fn): void
+{
+    try {
+        $fn();
+    } finally {
+        $db->exec('DELETE FROM cards');
+        $db->exec('DELETE FROM sections WHERE project_id > 4');
+        $db->exec('DELETE FROM projects WHERE id > 4');
+    }
+}
+
+function project_row(PDO $db, string $name): array
+{
+    foreach (list_projects($db) as $p) {
+        if ($p['name'] === $name) {
+            return $p;
+        }
+    }
+    throw new Exception("no project $name");
+}
+
+// The InvalidArgumentException message $fn throws.
+function error_of(callable $fn): string
+{
+    try {
+        $fn();
+    } catch (InvalidArgumentException $e) {
+        return $e->getMessage();
+    }
+    throw new Exception('expected InvalidArgumentException');
+}
+
 $tests = [
     'move_changes_column' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');
@@ -795,6 +828,88 @@ $tests = [
         throws(fn() => report_cards($db, 'Alpha', '2026-11-01', '2026-02-30'), 'no such day');
         throws(fn() => report_cards($db, 'Nope', '2026-11-01', '2026-11-02'), 'unknown project');
         ok(report_cards($db, 'Alpha', '2026-11-01', '2026-11-01')['sections'] === [], 'one-day range failed');
+    },
+    'add_project_with_sections_lists_them_in_order' => function (PDO $db) {
+        $dir = dirname(__DIR__);
+        with_new_projects($db, function () use ($db, $dir) {
+            // Forward slashes and a trailing slash come back as the real path.
+            $id = add_project($db, ' Test Site ', str_replace('\\', '/', $dir) . '/', 'green', ' Test Online ',
+                [['name' => 'Shop'], ['name' => 'Admin']], 'user');
+            $p = project_row($db, 'Test Site');
+            ok($p['id'] === $id && $p['folder'] === realpath($dir) && $p['color'] === 'green' && $p['site_name'] === 'Test Online'
+                && $p['card_count'] === 0, json_encode($p));
+            ok(array_column($p['sections'], 'name') === ['Shop', 'Admin'] && array_column($p['sections'], 'position') === [1, 2],
+                json_encode($p['sections']));
+            ok(array_column(list_sections($db, 'test site'), 'name') === ['Shop', 'Admin'], 'list_sections disagrees');
+            $e = list_events($db);
+            ok(count($e) === 2 && $e[1]['action'] === 'project' && $e[1]['card_id'] === null && $e[1]['detail'] === 'added Test Site',
+                json_encode($e));
+            // No sections and no report name are allowed.
+            add_project($db, 'Bare', $dir, 'slate', '', [], 'claude');
+            $b = project_row($db, 'Bare');
+            ok($b['sections'] === [] && $b['site_name'] === null, json_encode($b));
+        });
+    },
+    'add_project_validates' => function (PDO $db) {
+        $dir = dirname(__DIR__);
+        with_new_projects($db, function () use ($db, $dir) {
+            throws(fn() => add_project($db, 'ALPHA', $dir, 'blue', null, [], 'user'), 'duplicate name, other case');
+            throws(fn() => add_project($db, ' ', $dir, 'blue', null, [], 'user'), 'blank name');
+            throws(fn() => add_project($db, str_repeat('x', 51), $dir, 'blue', null, [], 'user'), '51-char name');
+            throws(fn() => add_project($db, 'New', 'C:\nope', 'blue', null, [], 'user'), 'missing folder');
+            throws(fn() => add_project($db, 'New', 'tests', 'blue', null, [], 'user'), 'relative folder');
+            throws(fn() => add_project($db, 'New', $dir, 'amber', null, [], 'user'), 'bad colour');
+            throws(fn() => add_project($db, 'New', $dir, 'blue', null, [['name' => 'A'], ['name' => 'a']], 'user'), 'duplicate section');
+            throws(fn() => add_project($db, 'New', $dir, 'blue', null, [['name' => str_repeat('x', 61)]], 'user'), '61-char section');
+            ok(count(list_projects($db)) === 4, 'bad project written');
+            ok($db->query('SELECT COUNT(*) FROM sections WHERE project_id > 4')->fetchColumn() == 0, 'section of a refused project written');
+        });
+    },
+    'edit_project_keeps_cards' => function (PDO $db) {
+        $dir = dirname(__DIR__);
+        with_new_projects($db, function () use ($db, $dir) {
+            $id = add_project($db, 'Old Name', $dir, 'gold', null, [['name' => 'Shop']], 'user');
+            $card = add_card($db, 'A', 'Old Name', 'user', null, 'Shop');
+            edit_project($db, $id, 'New Name', $dir . '\tests', 'pink', 'Staff Name', 'user');
+            $c = get_card($db, $card);
+            ok($c['project'] === 'New Name' && $c['section'] === 'Shop' && $c['folder'] === realpath("$dir\\tests"), json_encode($c));
+            ok(project_row($db, 'New Name')['card_count'] === 1 && project_row($db, 'New Name')['site_name'] === 'Staff Name', 'project row');
+            ok(list_events($db)[0]['detail'] === 'renamed Old Name to New Name', list_events($db)[0]['detail']);
+            throws(fn() => edit_project($db, $id, 'beta', $dir, 'pink', null, 'user'), 'rename onto another project');
+            $n = count(list_events($db));
+            edit_project($db, $id, 'new name', $dir . '\tests', 'pink', 'Staff Name', 'user'); // own name, other case
+            edit_project($db, $id, 'new name', $dir . '\tests', 'pink', 'Staff Name', 'user'); // nothing changed
+            ok(count(list_events($db)) === $n + 1, 'unchanged edit logged');
+            throws(fn() => edit_project($db, 9999, 'X', $dir, 'pink', null, 'user'), 'unknown project');
+        });
+    },
+    'save_sections_renames_reorders_adds_and_removes' => function (PDO $db) {
+        $dir = dirname(__DIR__);
+        with_new_projects($db, function () use ($db, $dir) {
+            $id = add_project($db, 'Shop', $dir, 'teal', null, [['name' => 'A'], ['name' => 'B'], ['name' => 'C']], 'user');
+            [$a, $b, $c] = array_column(project_row($db, 'Shop')['sections'], 'id');
+            $card = add_card($db, 'Tagged', 'Shop', 'user', null, 'A');
+            // Rename A to B and B to A (a swap), move C first, add D.
+            save_sections($db, $id, [['id' => $c, 'name' => 'C'], ['id' => $a, 'name' => 'B'], ['id' => $b, 'name' => 'A'], ['name' => 'D']], 'user');
+            $s = project_row($db, 'Shop')['sections'];
+            ok(array_map(fn($x) => "{$x['position']}:{$x['name']}", $s) === ['1:C', '2:B', '3:A', '4:D'], json_encode($s));
+            ok($s[1]['id'] === $a && $s[1]['card_count'] === 1, json_encode($s[1]));
+            ok(get_card($db, $card)['section'] === 'B', 'rename lost the tag: ' . get_card($db, $card)['section']);
+            // Removing the used section is refused and names the count; nothing changes.
+            $msg = error_of(fn() => save_sections($db, $id, [['id' => $c, 'name' => 'C']], 'user'));
+            ok(str_contains($msg, 'B') && str_contains($msg, '1 card'), "message: $msg");
+            ok(count(project_row($db, 'Shop')['sections']) === 4, 'refused save changed sections');
+            // Removing unused ones works.
+            save_sections($db, $id, [['id' => $a, 'name' => 'B']], 'user');
+            ok(array_column(project_row($db, 'Shop')['sections'], 'name') === ['B'], json_encode(project_row($db, 'Shop')['sections']));
+            // Another project's section id is refused.
+            $loans = list_sections($db, 'Alpha')[1]['id'];
+            throws(fn() => save_sections($db, $id, [['id' => $loans, 'name' => 'Loans']], 'user'), "Alpha's section");
+            ok(array_column(list_sections($db, 'Alpha'), 'name') === ['Members', 'Loans', 'Whole System'], 'Alpha changed');
+            $n = count(list_events($db));
+            save_sections($db, $id, [['id' => $a, 'name' => 'B']], 'user');
+            ok(count(list_events($db)) === $n, 'unchanged sections logged');
+        });
     },
     'board_version_tracks_newest_file' => function (PDO $db) {
         $f = dirname(__DIR__) . '/app.js';

@@ -190,6 +190,169 @@ function set_section(PDO $db, int $id, ?string $section, string $by): void
     });
 }
 
+// --- Projects editor: add and edit projects and their sections from the board (no delete) ---
+
+const PROJECT_COLORS = ['purple', 'teal', 'coral', 'pink', 'blue', 'green', 'gold', 'slate'];
+
+// Every project in id order with its card count and its sections (each with its card count), in report order.
+function list_projects(PDO $db): array
+{
+    $projects = $db->query('SELECT p.id, p.name, p.folder, p.color, p.site_name,
+            (SELECT COUNT(*) FROM cards c WHERE c.project_id = p.id) AS card_count
+        FROM projects p ORDER BY p.id')->fetchAll();
+    $st = $db->prepare('SELECT s.id, s.name, s.position, (SELECT COUNT(*) FROM cards c WHERE c.section_id = s.id) AS card_count
+        FROM sections s WHERE s.project_id = ? ORDER BY s.position, s.id');
+    foreach ($projects as &$p) {
+        $st->execute([$p['id']]);
+        $p['sections'] = array_map(fn($s) => ['id' => (int) $s['id'], 'name' => $s['name'], 'position' => (int) $s['position'],
+            'card_count' => (int) $s['card_count']], $st->fetchAll());
+        $p['id'] = (int) $p['id'];
+        $p['card_count'] = (int) $p['card_count'];
+    }
+    return $projects;
+}
+
+// An existing absolute folder (drive or UNC path); returns its real path, so slashes and a trailing \ are normalised.
+function check_folder(string $f): string
+{
+    $f = trim($f);
+    $real = preg_match('#^([A-Za-z]:[\\\\/]|[\\\\/]{2})#', $f) ? realpath($f) : false;
+    if ($real === false || !is_dir($real)) {
+        throw new InvalidArgumentException("Folder must be an existing full path, like C:\\xampp\\htdocs\\my-site ($f).");
+    }
+    return $real;
+}
+
+// Checks name, folder, colour and report name; returns them cleaned up. $id is the project being edited, if any.
+function check_project(PDO $db, ?int $id, string $name, string $folder, string $color, ?string $siteName): array
+{
+    $name = trim($name);
+    if ($name === '' || mb_strlen($name) > 50) {
+        throw new InvalidArgumentException('Project name must be 1 to 50 characters.');
+    }
+    $st = $db->prepare('SELECT id FROM projects WHERE LOWER(name) = LOWER(?) AND id <> ?');
+    $st->execute([$name, $id ?? 0]);
+    if ($st->fetchColumn() !== false) {
+        throw new InvalidArgumentException("There is already a project called $name.");
+    }
+    if (!in_array($color, PROJECT_COLORS, true)) {
+        throw new InvalidArgumentException("Unknown colour '$color' (use " . implode(', ', PROJECT_COLORS) . ').');
+    }
+    $siteName = $siteName === null || trim($siteName) === '' ? null : trim($siteName);
+    if ($siteName !== null && mb_strlen($siteName) > 100) {
+        throw new InvalidArgumentException('Report name is longer than 100 characters.');
+    }
+    return [$name, check_folder($folder), $siteName];
+}
+
+function add_project(PDO $db, string $name, string $folder, string $color, ?string $siteName, array $sections, string $by): int
+{
+    check_by($by);
+    [$name, $folder, $siteName] = check_project($db, null, $name, $folder, $color, $siteName);
+    return in_tx($db, function () use ($db, $name, $folder, $color, $siteName, $sections, $by) {
+        $db->prepare('INSERT INTO projects (name, folder, color, site_name) VALUES (?, ?, ?, ?)')
+            ->execute([$name, $folder, $color, $siteName]);
+        $id = (int) $db->lastInsertId();
+        log_request_event($db, $name, $by, 'project', "added $name");
+        write_sections($db, $id, $name, $sections, $by);
+        return $id;
+    });
+}
+
+// Cards point at the project id, so a rename keeps them.
+function edit_project(PDO $db, int $id, string $name, string $folder, string $color, ?string $siteName, string $by): void
+{
+    check_by($by);
+    [$name, $folder, $siteName] = check_project($db, $id, $name, $folder, $color, $siteName);
+    in_tx($db, function () use ($db, $id, $name, $folder, $color, $siteName, $by) {
+        $st = $db->prepare('SELECT name, folder, color, site_name FROM projects WHERE id = ? FOR UPDATE');
+        $st->execute([$id]);
+        $old = $st->fetch() ?: throw new InvalidArgumentException("No project #$id.");
+        if ($old === ['name' => $name, 'folder' => $folder, 'color' => $color, 'site_name' => $siteName]) {
+            return; // nothing changed: nothing to write or log
+        }
+        $db->prepare('UPDATE projects SET name = ?, folder = ?, color = ?, site_name = ? WHERE id = ?')
+            ->execute([$name, $folder, $color, $siteName, $id]);
+        log_request_event($db, $name, $by, 'project', $old['name'] === $name ? "edited $name" : "renamed {$old['name']} to $name");
+    });
+}
+
+// $sections: the whole ordered list, each ['id' => ?int, 'name' => string]. An id renames, no id adds,
+// a missing one is removed (refused while cards use it); positions follow the list.
+function save_sections(PDO $db, int $projectId, array $sections, string $by): void
+{
+    check_by($by);
+    in_tx($db, function () use ($db, $projectId, $sections, $by) {
+        $st = $db->prepare('SELECT name FROM projects WHERE id = ? FOR UPDATE');
+        $st->execute([$projectId]);
+        $name = $st->fetchColumn();
+        if ($name === false) {
+            throw new InvalidArgumentException("No project #$projectId.");
+        }
+        write_sections($db, $projectId, $name, $sections, $by);
+    });
+}
+
+// save_sections without its transaction, so add_project can run it inside its own.
+function write_sections(PDO $db, int $pid, string $project, array $sections, string $by): void
+{
+    $want = [];
+    $seen = [];
+    foreach (array_values($sections) as $i => $s) {
+        $n = trim((string) ($s['name'] ?? ''));
+        if ($n === '' || mb_strlen($n) > 60) {
+            throw new InvalidArgumentException('Section name must be 1 to 60 characters.');
+        }
+        if (isset($seen[mb_strtolower($n)])) {
+            throw new InvalidArgumentException("Section $n is in the list twice.");
+        }
+        $seen[mb_strtolower($n)] = true;
+        $sid = $s['id'] ?? null;
+        $want[] = ['id' => $sid === null || $sid === '' ? null : (int) $sid, 'name' => $n, 'position' => $i + 1];
+    }
+    $st = $db->prepare('SELECT s.id, s.name, s.position, (SELECT COUNT(*) FROM cards c WHERE c.section_id = s.id) AS used
+        FROM sections s WHERE s.project_id = ? ORDER BY s.position, s.id FOR UPDATE');
+    $st->execute([$pid]);
+    $have = array_column($st->fetchAll(), null, 'id');
+    $kept = array_filter(array_column($want, 'id'));
+    if (count($kept) !== count(array_unique($kept))) {
+        throw new InvalidArgumentException('A section is in the list twice.');
+    }
+    foreach ($kept as $sid) {
+        if (!isset($have[$sid])) {
+            throw new InvalidArgumentException("Section #$sid is not one of $project's.");
+        }
+    }
+    $before = array_map(fn($s) => [(int) $s['id'], $s['name'], (int) $s['position']], array_values($have));
+    foreach ($have as $sid => $s) {
+        if (!in_array($sid, $kept, true) && $s['used'] > 0) {
+            throw new InvalidArgumentException("Section {$s['name']} is used by {$s['used']} " . ($s['used'] == 1 ? 'card' : 'cards')
+                . '; give those cards another section first.');
+        }
+    }
+    $db->prepare('DELETE FROM sections WHERE project_id = ? AND id NOT IN (' . implode(',', [0, ...$kept]) . ')')->execute([$pid]);
+    // Swapping two names would hit UNIQUE (project_id, name) halfway, so kept rows step through a placeholder name.
+    $tmp = $db->prepare("UPDATE sections SET name = CONCAT('~', id) WHERE id = ?");
+    foreach ($kept as $sid) {
+        $tmp->execute([$sid]);
+    }
+    $upd = $db->prepare('UPDATE sections SET name = ?, position = ? WHERE id = ?');
+    $ins = $db->prepare('INSERT INTO sections (project_id, name, position) VALUES (?, ?, ?)');
+    $after = [];
+    foreach ($want as $w) {
+        if ($w['id'] !== null) {
+            $upd->execute([$w['name'], $w['position'], $w['id']]);
+        } else {
+            $ins->execute([$pid, $w['name'], $w['position']]);
+            $w['id'] = (int) $db->lastInsertId();
+        }
+        $after[] = [$w['id'], $w['name'], $w['position']];
+    }
+    if ($before !== $after) {
+        log_request_event($db, $project, $by, 'project', "sections of $project: " . (implode(', ', array_column($want, 'name')) ?: 'none'));
+    }
+}
+
 const REPORT_UNDERWAY = ['building', 'review', 'test'];
 
 function check_date(string $d): void
