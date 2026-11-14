@@ -41,6 +41,37 @@ function prompt_of(string $url): string
     return $q['prompt'];
 }
 
+// A temp project "Deploys" whose folder holds $md as DEPLOYMENTS.md; runs $fn($file), then removes both.
+function with_deploy_log(PDO $db, string $md, callable $fn): void
+{
+    $dir = sys_get_temp_dir() . '\kanban_deploy_test';
+    @mkdir($dir, 0777, true);
+    $file = "$dir\\DEPLOYMENTS.md";
+    file_put_contents($file, $md);
+    try {
+        $db->prepare("INSERT INTO projects (name, folder, color) VALUES ('Deploys', ?, 'teal')")->execute([$dir]);
+        $fn($file);
+    } finally {
+        $db->exec('DELETE FROM cards');
+        $db->exec("DELETE FROM projects WHERE name = 'Deploys'");
+        unlink($file);
+        rmdir($dir);
+    }
+}
+
+// Rewrites the log with a later mtime so the next sync parses it again.
+function rewrite_log(string $file, string $md): void
+{
+    file_put_contents($file, $md);
+    touch($file, filemtime($file) + 5);
+    clearstatcache();
+}
+
+function entry(string $heading, string $card, string $verified = 'live page shows the fix'): string
+{
+    return "## $heading\n- By: Claude, requested by the user\n- Code: abc → def\n$card- Verified: $verified\n\n";
+}
+
 $tests = [
     'move_changes_column' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');
@@ -378,6 +409,72 @@ $tests = [
         move_card($db, $id, 'test', 'user');
         ok(card($db, $id)['live_at'] === '2020-01-01', 'live_at changed on moving out');
     },
+    'sync_moves_card_named_in_deploy_entry' => function (PDO $db) {
+        with_deploy_log($db, '', function ($file) use ($db) {
+            $id = add_card($db, 'Fix totals', 'Deploys', 'user');
+            set_blocked($db, $id, 'Waiting', 'user');
+            $other = add_card($db, 'Other', 'Deploys', 'user');
+            rewrite_log($file, "# Deployments\n\n" . entry('2026-11-12 16:15 — abc123 — Fix totals', "- Card: #$id, #$other\n"));
+            $db->exec('DELETE FROM events');
+            ok(sync_deployments($db) === 2, 'not 2 moved');
+            $c = card($db, $id);
+            ok($c['col'] === 'live' && $c['live_at'] === '2026-11-12' && $c['blocked'] == 0 && $c['updated_by'] === 'claude', json_encode($c));
+            ok(col_order($db, 'live') === ['0:Fix totals', '1:Other'], implode(',', col_order($db, 'live')));
+            $e = array_values(array_filter(list_events($db), fn($e) => $e['card_id'] == $id));
+            ok(count($e) === 1 && $e[0]['action'] === 'live' && $e[0]['author'] === 'claude'
+                && $e[0]['detail'] === '2026-11-12 Fix totals', json_encode($e));
+        });
+    },
+    'sync_ignores_unchanged_file_and_unknown_cards' => function (PDO $db) {
+        with_deploy_log($db, '', function ($file) use ($db) {
+            $id = add_card($db, 'A', 'Deploys', 'user');
+            rewrite_log($file, entry('2026-11-12 16:15 — data only — Fix', "- Card: #99999\n"));
+            ok(sync_deployments($db) === 0, 'unknown card moved something');
+            $mtime = filemtime($file);
+            file_put_contents($file, entry('2026-11-12 16:15 — data only — Fix', "- Card: #$id\n"));
+            touch($file, $mtime); // same mtime: sync must not read it again
+            clearstatcache();
+            ok(sync_deployments($db) === 0, 'unchanged file parsed again');
+            ok(card($db, $id)['col'] === 'todo', 'card moved from an unchanged file');
+        });
+    },
+    'sync_parses_heading_card_mention' => function (PDO $db) {
+        with_deploy_log($db, '', function ($file) use ($db) {
+            $id = add_card($db, 'Fix totals', 'Deploys', 'user');
+            rewrite_log($file, str_replace("\n", "\r\n", entry("2026-11-12 16:15 — abc123 — Fix totals (CARD #$id)", '')));
+            ok(sync_deployments($db) === 1, 'heading mention not moved');
+            ok(card($db, $id)['col'] === 'live', 'not live');
+            ok(list_events($db)[0]['detail'] === '2026-11-12 Fix totals', list_events($db)[0]['detail']);
+        });
+    },
+    'sync_ignores_unverified_entry' => function (PDO $db) {
+        with_deploy_log($db, '', function ($file) use ($db) {
+            $a = add_card($db, 'A', 'Deploys', 'user');
+            $b = add_card($db, 'B', 'Deploys', 'user');
+            rewrite_log($file, entry('2026-11-12 16:15 — abc — A', "- Card: #$a\n", 'none')
+                . "## 2026-11-13 09:00 — def — B\n- Card: #$b\n\n");
+            ok(sync_deployments($db) === 0, 'unverified entry moved a card');
+            ok(card($db, $a)['col'] === 'todo' && card($db, $b)['col'] === 'todo', 'moved');
+        });
+    },
+    'sync_skips_card_of_another_project' => function (PDO $db) {
+        with_deploy_log($db, '', function ($file) use ($db) {
+            $id = add_card($db, 'A', 'Alpha', 'user');
+            rewrite_log($file, entry('2026-11-12 16:15 — abc — A', "- Card: #$id\n"));
+            ok(sync_deployments($db) === 0 && card($db, $id)['col'] === 'todo', 'card of another project moved');
+        });
+    },
+    'sync_card_moved_out_of_live_stays_out' => function (PDO $db) {
+        with_deploy_log($db, '', function ($file) use ($db) {
+            $id = add_card($db, 'A', 'Deploys', 'user');
+            $md = entry('2026-11-12 16:15 — abc — A', "- Card: #$id\n");
+            rewrite_log($file, $md);
+            ok(sync_deployments($db) === 1, 'not moved');
+            move_card($db, $id, 'test', 'user');
+            rewrite_log($file, entry('2026-11-13 10:00 — def — Other', "- Card: none\n") . $md);
+            ok(sync_deployments($db) === 0 && card($db, $id)['col'] === 'test', 'moved back into Live');
+        });
+    },
     'board_version_tracks_newest_file' => function (PDO $db) {
         $f = dirname(__DIR__) . '/app.js';
         $old = filemtime($f);
@@ -405,6 +502,8 @@ foreach ($tests as $name => $fn) {
     $db->exec('DELETE FROM cards');
     $db->exec('DELETE FROM requests');
     $db->exec('DELETE FROM events');
+    $db->exec('DELETE FROM deploy_sync');
+    $db->exec('DELETE FROM deploy_applied');
     try {
         $fn($db);
         echo "PASS $name\n";

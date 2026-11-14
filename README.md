@@ -38,6 +38,7 @@ php board.php status <id> "<text>"        # what Claude is doing now; "" clears
 php board.php note <id> "<text>"
 php board.php notes <id>                  # oldest first
 php board.php plan <id> <path>            # a .md file inside the project folder
+php board.php sync                        # cards named in new verified DEPLOYMENTS.md entries go Live; prints the count
 ```
 
 Upgrading from v1: back up, then `C:\xampp\mysql\bin\mysql.exe -uroot kanban < migrations/002_v2.sql`, then the same with `migrations/003_session_active.sql`.

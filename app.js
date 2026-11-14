@@ -1021,6 +1021,7 @@ function eventText(e) {
         case 'plan': return `set the plan for ${n}`;
         case 'request': return `added a request (${e.detail})`;
         case 'request_deleted': return 'deleted a request';
+        case 'live': return `${n} went live — ${e.detail}`;
         default: return `${e.action} ${n}`;
     }
 }
@@ -1069,6 +1070,7 @@ async function pollClaude() {
             const e = list[0];
             const blocked = list.findLast(b => b.action === 'blocked'); // a question outranks the rest
             toast(blocked ? `Claude needs you on #${id}: ${blocked.detail}${list.length > 1 ? ` (+${list.length - 1} more)` : ''}`
+                : list.some(b => b.action === 'live') ? `Claude: #${id} is live`
                 : list.length > 1 ? `Claude made ${list.length} changes on #${id}`
                 : `Claude ${eventText(e)}`, { kind: 'claude' });
         }

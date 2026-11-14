@@ -1,11 +1,11 @@
 <?php
-// CLI for Claude: php board.php add|move|block|unblock|find|status|note|notes|plan ...
+// CLI for Claude: php board.php add|move|block|unblock|find|status|note|notes|plan|sync ...
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
 const USAGE = 'Usage: php board.php add "<title>" <project> | move <id> <column> [position]'
     . ' | block <id> "<reason>" | unblock <id> | find "<text>"'
-    . ' | status <id> "<text>" | note <id> "<text>" | notes <id> | plan <id> <path>';
+    . ' | status <id> "<text>" | note <id> "<text>" | notes <id> | plan <id> <path> | sync';
 
 function int_arg(?string $s): int
 {
@@ -69,6 +69,9 @@ try {
         case 'plan':
             need($a, $b);
             set_plan($db, int_arg($a), $b, 'claude');
+            break;
+        case 'sync':
+            echo sync_deployments($db), "\n";
             break;
         default:
             throw new InvalidArgumentException(USAGE);

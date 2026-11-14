@@ -1,6 +1,6 @@
 <?php
 // JSON API for the web board.
-// GET: a=list[&project=Name], a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown).
+// GET: a=list[&project=Name] (first moves cards named in new verified DEPLOYMENTS.md entries to Live), a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown).
 // POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project), a=delete (id), a=note (id, body),
 //       a=start_db (launches MySQL if it is not running; works without a database).
 // Requests: GET a=requests (requests + earlier requesters); POST a=request_add (body, requester, project, kind),
@@ -67,6 +67,7 @@ try {
     }
     switch ($a) {
         case 'list':
+            sync_deployments($db); // cheap: reads a DEPLOYMENTS.md only when its mtime changed
             $project = $_GET['project'] ?? '';
             out([
                 'cards' => list_cards($db, $project === '' ? null : $project),
