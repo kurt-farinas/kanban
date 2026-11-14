@@ -69,7 +69,8 @@ try {
     switch ($cmd) {
         case 'add':
             need($a, $b);
-            echo '#', add_card($db, $a, $b, 'claude', null, $c), "\n";
+            $id = add_card($db, $a, $b, 'claude', null, $c); // first: echo '#', add_card() printed "#" before an error
+            echo "#$id\n";
             break;
         case 'move':
             need($a, $b);
