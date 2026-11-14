@@ -1,7 +1,12 @@
 <?php
-// JSON API for the web board: GET ?a=list[&project=Name], POST a=add (title, project), POST a=move (id, col, position).
+// JSON API for the web board.
+// GET: a=list[&project=Name], a=card&id=N (card + notes), a=events (50 newest), a=plan&id=N (markdown).
+// POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project), a=delete (id), a=note (id, body).
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
+
+const GET_ACTIONS = ['list', 'card', 'events', 'plan'];
+const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note'];
 
 function out(array $data, int $code = 200): never
 {
@@ -13,11 +18,11 @@ function out(array $data, int $code = 200): never
 
 function int_param(string $name, bool $optional = false): ?int
 {
-    $v = $_POST[$name] ?? '';
+    $v = $_POST[$name] ?? $_GET[$name] ?? '';
     if ($optional && $v === '') {
         return null;
     }
-    if (!ctype_digit($v)) {
+    if (!is_string($v) || !ctype_digit($v)) {
         throw new InvalidArgumentException("$name must be a whole number.");
     }
     return (int) $v;
@@ -34,11 +39,11 @@ if (!in_array($host, ['localhost', '127.0.0.1', '[::1]'], true)) {
 if ($post && ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? 'same-origin') !== 'same-origin') {
     out(['error' => 'Cross-site request refused.'], 403);
 }
-if (!in_array($a, ['list', 'add', 'move'], true)) {
+if (!in_array($a, [...GET_ACTIONS, ...POST_ACTIONS], true)) {
     out(['error' => "Unknown action '$a'."], 400);
 }
-if ($post !== ($a !== 'list')) {
-    out(['error' => $post ? 'Use GET for list.' : "Use POST for $a."], 405);
+if ($post !== in_array($a, POST_ACTIONS, true)) {
+    out(['error' => $post ? "Use GET for $a." : "Use POST for $a."], 405);
 }
 
 try {
@@ -47,24 +52,41 @@ try {
     } catch (PDOException $e) {
         out(['error' => "Can't reach the database. Is MySQL running in XAMPP?"], 503);
     }
-    if ($a === 'list') {
-        $project = $_GET['project'] ?? '';
-        out([
-            'cards' => list_cards($db, $project === '' ? null : $project),
-            'projects' => $db->query('SELECT name, color FROM projects ORDER BY id')->fetchAll(),
-            'columns' => COLUMNS,
-        ]);
-    }
-    if ($a === 'add') {
-        out(['id' => add_card($db, $_POST['title'] ?? '', $_POST['project'] ?? '', 'user')]);
+    switch ($a) {
+        case 'list':
+            $project = $_GET['project'] ?? '';
+            out([
+                'cards' => list_cards($db, $project === '' ? null : $project),
+                'projects' => $db->query('SELECT name, color FROM projects ORDER BY id')->fetchAll(),
+                'columns' => COLUMNS,
+            ]);
+        case 'card':
+            $id = int_param('id');
+            out(['card' => get_card($db, $id), 'notes' => list_notes($db, $id)]);
+        case 'events':
+            out(['events' => list_events($db)]);
+        case 'plan':
+            $card = get_card($db, int_param('id'));
+            if ($card['plan_path'] === null || !is_file($card['plan_path'])) {
+                out(['error' => 'No plan yet'], 404);
+            }
+            out(['markdown' => file_get_contents(check_plan_path($card['plan_path'], $card['folder']))]);
+        case 'add':
+            out(['id' => add_card($db, $_POST['title'] ?? '', $_POST['project'] ?? '', 'user')]);
+        case 'edit':
+            edit_card($db, int_param('id'), $_POST['title'] ?? '', $_POST['project'] ?? '', 'user');
+            out(['ok' => true]);
+        case 'delete':
+            delete_card($db, int_param('id'), 'user');
+            out(['ok' => true]);
+        case 'note':
+            out(['id' => add_note($db, int_param('id'), $_POST['body'] ?? '', 'user')]);
     }
     $id = int_param('id');
     $col = $_POST['col'] ?? '';
     $from = card_col($db, $id);
     move_card($db, $id, $col, 'user', int_param('position', true));
-    $st = $db->prepare(CARD_SELECT . ' WHERE c.id = ?');
-    $st->execute([$id]);
-    $card = $st->fetch();
+    $card = get_card($db, $id);
     out(['ok' => true, 'link' => $from === $col ? null : claude_link($card, $card['folder'])]);
 } catch (InvalidArgumentException $e) {
     out(['error' => $e->getMessage()], 400);

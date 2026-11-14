@@ -136,6 +136,82 @@ $tests = [
         ok($folders[0] === 'C:\xampp\htdocs\alpha', $folders[0]);
         ok($folders[3] === 'C:\Users\Example\delta-two', $folders[3]);
     },
+    'edit_changes_title_and_project' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        edit_card($db, $id, 'B', 'Beta', 'user');
+        $r = list_cards($db)[0];
+        ok($r['title'] === 'B' && $r['project'] === 'Beta', "{$r['title']}/{$r['project']}");
+    },
+    'edit_rejects_empty_title' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        throws(fn() => edit_card($db, $id, ' ', 'Alpha', 'user'), 'blank title');
+        ok(card($db, $id)['title'] === 'A', 'title changed');
+    },
+    'delete_removes_card_notes_and_closes_gap' => function (PDO $db) {
+        add_card($db, 'A', 'Alpha', 'user');
+        $b = add_card($db, 'B', 'Alpha', 'user');
+        add_card($db, 'C', 'Alpha', 'user');
+        add_note($db, $b, 'hello', 'user');
+        delete_card($db, $b, 'user');
+        ok(col_order($db) === ['0:A', '1:C'], implode(',', col_order($db)));
+        ok($db->query("SELECT COUNT(*) FROM notes WHERE card_id = $b")->fetchColumn() == 0, 'notes left');
+        $e = list_events($db)[0];
+        ok($e['action'] === 'deleted' && $e['card_title'] === 'B', "{$e['action']} {$e['card_title']}");
+    },
+    'note_records_author' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        add_note($db, $id, 'first', 'claude');
+        $n = list_notes($db, $id);
+        ok(count($n) === 1 && $n[0]['author'] === 'claude' && $n[0]['body'] === 'first', json_encode($n));
+    },
+    'note_rejects_empty_and_long' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        throws(fn() => add_note($db, $id, '  ', 'user'), 'blank note');
+        throws(fn() => add_note($db, $id, str_repeat('é', 2001), 'user'), '2001 chars');
+        add_note($db, $id, str_repeat('é', 2000), 'user');
+        ok(count(list_notes($db, $id)) === 1, 'note count');
+    },
+    'status_caps_and_clears' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        set_status($db, $id, 'Fixing the page', 'claude');
+        ok(card($db, $id)['status'] === 'Fixing the page', 'status not set');
+        throws(fn() => set_status($db, $id, str_repeat('x', 121), 'claude'), '121 chars');
+        set_status($db, $id, null, 'claude');
+        ok(card($db, $id)['status'] === null, 'status not cleared');
+        ok(count(list_events($db)) === 1, 'status change logged');
+    },
+    'plan_path_must_be_in_project_folder' => function (PDO $db) {
+        $dir = sys_get_temp_dir() . '\kanban_plan_test';
+        @mkdir("$dir\\proj", 0777, true);
+        file_put_contents("$dir\\proj\\plan.md", '# Plan');
+        file_put_contents("$dir\\proj\\plan.txt", 'x');
+        file_put_contents("$dir\\outside.md", '# No');
+        try {
+            $db->prepare("INSERT INTO projects (name, folder, color) VALUES ('Plans', ?, 'teal')")->execute(["$dir\\proj"]);
+            $id = add_card($db, 'A', 'Plans', 'user');
+            throws(fn() => set_plan($db, $id, "$dir\\outside.md", 'claude'), 'outside folder');
+            throws(fn() => set_plan($db, $id, "$dir\\proj\\..\\outside.md", 'claude'), 'dot-dot escape');
+            throws(fn() => set_plan($db, $id, "$dir\\proj\\plan.txt", 'claude'), 'not .md');
+            throws(fn() => set_plan($db, $id, "$dir\\proj\\missing.md", 'claude'), 'missing file');
+            ok(card($db, $id)['plan_path'] === null, 'bad path stored');
+            // Case and slash direction do not matter on Windows.
+            set_plan($db, $id, strtoupper(str_replace('\\', '/', "$dir\\proj\\plan.md")), 'claude');
+            ok(card($db, $id)['plan_path'] !== null, 'good path refused');
+        } finally {
+            $db->exec('DELETE FROM cards');
+            $db->exec("DELETE FROM projects WHERE name = 'Plans'");
+            array_map('unlink', ["$dir\\proj\\plan.md", "$dir\\proj\\plan.txt", "$dir\\outside.md"]);
+            rmdir("$dir\\proj");
+            rmdir($dir);
+        }
+    },
+    'every_write_logs_one_event' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        move_card($db, $id, 'building', 'claude');
+        add_note($db, $id, 'done', 'user');
+        $got = array_map(fn($e) => "{$e['action']}:{$e['author']}:{$e['card_title']}", list_events($db));
+        ok($got === ['note:user:A', 'moved:claude:A', 'added:user:A'], implode(',', $got));
+    },
 ];
 
 $server = db('');
@@ -148,6 +224,7 @@ $db->exec(file_get_contents(dirname(__DIR__) . '/seed.example.sql'));
 $pass = $fail = 0;
 foreach ($tests as $name => $fn) {
     $db->exec('DELETE FROM cards');
+    $db->exec('DELETE FROM events');
     try {
         $fn($db);
         echo "PASS $name\n";

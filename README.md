@@ -34,7 +34,13 @@ php board.php move <id> <column> [pos]    # todo, planning, building, review, te
 php board.php block <id> "<question>"
 php board.php unblock <id>
 php board.php find "<text>"
+php board.php status <id> "<text>"        # what Claude is doing now; "" clears
+php board.php note <id> "<text>"
+php board.php notes <id>                  # oldest first
+php board.php plan <id> <path>            # a .md file inside the project folder
 ```
+
+Upgrading from v1: back up, then `C:\xampp\mysql\bin\mysql.exe -uroot kanban < migrations/002_v2.sql`.
 
 To have Claude keep the board current, add a rule to your `~/.claude/CLAUDE.md` telling it to run these commands as work moves on.
 

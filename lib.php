@@ -3,7 +3,9 @@ const COLUMNS = ['todo', 'planning', 'building', 'review', 'test', 'live'];
 
 // ORDER BY c.col sorts by ENUM index, which is COLUMNS order.
 const CARD_SELECT = 'SELECT c.id, c.title, c.col, c.position, c.blocked, c.blocked_reason,
-        p.name AS project, p.color, p.folder, c.updated_by, c.updated_at
+        p.name AS project, p.color, p.folder, c.updated_by, c.updated_at,
+        c.status, c.working_since, c.plan_path,
+        (SELECT COUNT(*) FROM notes n WHERE n.card_id = c.id) AS note_count
     FROM cards c JOIN projects p ON p.id = c.project_id';
 const CARD_ORDER = ' ORDER BY c.col, c.position, c.id';
 
@@ -53,19 +55,150 @@ function list_cards(PDO $db, ?string $project = null): array
     return $st->fetchAll();
 }
 
-function add_card(PDO $db, string $title, string $project, string $by): int
+function check_title(string $title): void
 {
-    check_by($by);
     if (trim($title) === '') {
         throw new InvalidArgumentException('Title is empty.');
     }
     if (mb_strlen($title) > 200) {
         throw new InvalidArgumentException('Title is longer than 200 characters.');
     }
-    $st = $db->prepare("INSERT INTO cards (project_id, title, col, position, updated_by)
-        SELECT ?, ?, 'todo', COALESCE(MAX(position) + 1, 0), ? FROM cards WHERE col = 'todo'");
-    $st->execute([project_id($db, $project), $title, $by]);
-    return (int) $db->lastInsertId();
+}
+
+function in_tx(PDO $db, callable $fn): mixed
+{
+    $db->beginTransaction();
+    try {
+        $r = $fn();
+        $db->commit();
+        return $r;
+    } catch (Throwable $e) {
+        $db->rollBack();
+        throw $e;
+    }
+}
+
+// Copies the card title in, so the log still reads after the card is deleted.
+function log_event(PDO $db, int $id, string $by, string $action, string $detail = ''): void
+{
+    $db->prepare('INSERT INTO events (card_id, card_title, author, action, detail) SELECT id, title, ?, ?, ? FROM cards WHERE id = ?')
+        ->execute([$by, $action, mb_substr($detail, 0, 200), $id]);
+}
+
+function get_card(PDO $db, int $id): array
+{
+    $st = $db->prepare(CARD_SELECT . ' WHERE c.id = ?');
+    $st->execute([$id]);
+    return $st->fetch() ?: throw new InvalidArgumentException("No card #$id.");
+}
+
+function add_card(PDO $db, string $title, string $project, string $by): int
+{
+    check_by($by);
+    check_title($title);
+    $pid = project_id($db, $project);
+    return in_tx($db, function () use ($db, $pid, $title, $by, $project) {
+        $st = $db->prepare("INSERT INTO cards (project_id, title, col, position, updated_by)
+            SELECT ?, ?, 'todo', COALESCE(MAX(position) + 1, 0), ? FROM cards WHERE col = 'todo'");
+        $st->execute([$pid, $title, $by]);
+        $id = (int) $db->lastInsertId();
+        log_event($db, $id, $by, 'added', $project);
+        return $id;
+    });
+}
+
+function edit_card(PDO $db, int $id, string $title, string $project, string $by): void
+{
+    check_by($by);
+    check_title($title);
+    $pid = project_id($db, $project);
+    in_tx($db, function () use ($db, $id, $pid, $title, $by, $project) {
+        card_col($db, $id, true);
+        $db->prepare('UPDATE cards SET title = ?, project_id = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            ->execute([$title, $pid, $by, $id]);
+        log_event($db, $id, $by, 'edited', $project);
+    });
+}
+
+function delete_card(PDO $db, int $id, string $by): void
+{
+    check_by($by);
+    in_tx($db, function () use ($db, $id, $by) {
+        $col = card_col($db, $id, true);
+        log_event($db, $id, $by, 'deleted', $col);
+        $db->prepare('DELETE FROM cards WHERE id = ?')->execute([$id]);
+        $st = $db->prepare('SELECT id FROM cards WHERE col = ? ORDER BY position, id FOR UPDATE');
+        $st->execute([$col]);
+        renumber($db, $st->fetchAll(PDO::FETCH_COLUMN), $id);
+    });
+}
+
+function add_note(PDO $db, int $id, string $body, string $by): int
+{
+    check_by($by);
+    if (trim($body) === '') {
+        throw new InvalidArgumentException('Note is empty.');
+    }
+    if (mb_strlen($body) > 2000) {
+        throw new InvalidArgumentException('Note is longer than 2000 characters.');
+    }
+    return in_tx($db, function () use ($db, $id, $body, $by) {
+        card_col($db, $id);
+        $db->prepare('INSERT INTO notes (card_id, author, body) VALUES (?, ?, ?)')->execute([$id, $by, $body]);
+        $nid = (int) $db->lastInsertId();
+        log_event($db, $id, $by, 'note', $body);
+        return $nid;
+    });
+}
+
+function list_notes(PDO $db, int $id): array
+{
+    card_col($db, $id);
+    $st = $db->prepare('SELECT id, author, body, created_at FROM notes WHERE card_id = ? ORDER BY id');
+    $st->execute([$id]);
+    return $st->fetchAll();
+}
+
+// Not logged (changes often) and leaves updated_at alone; null or blank clears.
+function set_status(PDO $db, int $id, ?string $text, string $by): void
+{
+    check_by($by);
+    $text = $text === null || trim($text) === '' ? null : $text;
+    if ($text !== null && mb_strlen($text) > 120) {
+        throw new InvalidArgumentException('Status is longer than 120 characters.');
+    }
+    card_col($db, $id);
+    $db->prepare('UPDATE cards SET status = ?, updated_at = updated_at WHERE id = ?')->execute([$text, $id]);
+}
+
+// Returns the real path of a .md file inside $folder (case and slash direction ignored), or throws.
+function check_plan_path(string $path, string $folder): string
+{
+    $norm = fn($p) => strtolower(str_replace('\\', '/', $p));
+    $real = realpath($path);
+    $dir = realpath($folder);
+    if ($real === false || $dir === false || !is_file($real)
+        || !str_ends_with($norm($real), '.md') || !str_starts_with($norm($real), rtrim($norm($dir), '/') . '/')) {
+        throw new InvalidArgumentException("Plan must be an existing .md file inside the project folder ($folder).");
+    }
+    return $real;
+}
+
+function set_plan(PDO $db, int $id, string $path, string $by): void
+{
+    check_by($by);
+    $real = check_plan_path($path, get_card($db, $id)['folder']);
+    in_tx($db, function () use ($db, $id, $real, $by) {
+        $db->prepare('UPDATE cards SET plan_path = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            ->execute([$real, $by, $id]);
+        log_event($db, $id, $by, 'plan', $real);
+    });
+}
+
+function list_events(PDO $db, int $limit = 50): array
+{
+    return $db->query('SELECT id, card_id, card_title, author, action, detail, created_at FROM events
+        ORDER BY id DESC LIMIT ' . max(1, $limit))->fetchAll();
 }
 
 function move_card(PDO $db, int $id, string $col, string $by, ?int $position = null): void
@@ -102,6 +235,7 @@ function move_card_once(PDO $db, int $id, string $col, string $by, ?int $positio
         $db->prepare('UPDATE cards SET col = ?, position = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
             ->execute([$col, $position, $by, $id]);
         renumber($db, $ids, $id);
+        log_event($db, $id, $by, 'moved', "$from → $col");
         if ($from !== $col) {
             $st = $db->prepare('SELECT id FROM cards WHERE col = ? ORDER BY position, id FOR UPDATE');
             $st->execute([$from]);
@@ -132,9 +266,12 @@ function set_blocked(PDO $db, int $id, ?string $reason, string $by): void
     if ($blocked && mb_strlen($reason) > 500) {
         throw new InvalidArgumentException('Blocked reason is longer than 500 characters.');
     }
-    card_col($db, $id);
-    $db->prepare('UPDATE cards SET blocked = ?, blocked_reason = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-        ->execute([(int) $blocked, $blocked ? $reason : null, $by, $id]);
+    in_tx($db, function () use ($db, $id, $blocked, $reason, $by) {
+        card_col($db, $id, true);
+        $db->prepare('UPDATE cards SET blocked = ?, blocked_reason = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            ->execute([(int) $blocked, $blocked ? $reason : null, $by, $id]);
+        log_event($db, $id, $by, $blocked ? 'blocked' : 'unblocked', $blocked ? $reason : '');
+    });
 }
 
 function find_cards(PDO $db, string $text): array

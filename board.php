@@ -1,10 +1,11 @@
 <?php
-// CLI for Claude: php board.php add|move|block|unblock|find ...
+// CLI for Claude: php board.php add|move|block|unblock|find|status|note|notes|plan ...
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
 const USAGE = 'Usage: php board.php add "<title>" <project> | move <id> <column> [position]'
-    . ' | block <id> "<reason>" | unblock <id> | find "<text>"';
+    . ' | block <id> "<reason>" | unblock <id> | find "<text>"'
+    . ' | status <id> "<text>" | note <id> "<text>" | notes <id> | plan <id> <path>';
 
 function int_arg(?string $s): int
 {
@@ -52,6 +53,22 @@ try {
             foreach (find_cards($db, $a) as $r) {
                 echo "#{$r['id']} [{$r['col']}] {$r['project']}: {$r['title']}\n";
             }
+            break;
+        case 'status':
+            set_status($db, int_arg($a), $b, 'claude');
+            break;
+        case 'note':
+            need($a, $b);
+            add_note($db, int_arg($a), $b, 'claude');
+            break;
+        case 'notes':
+            foreach (list_notes($db, int_arg($a)) as $n) {
+                echo "[{$n['author']} {$n['created_at']}] {$n['body']}\n";
+            }
+            break;
+        case 'plan':
+            need($a, $b);
+            set_plan($db, int_arg($a), $b, 'claude');
             break;
         default:
             throw new InvalidArgumentException(USAGE);
