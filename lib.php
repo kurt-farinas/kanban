@@ -364,6 +364,37 @@ function hook_stop(PDO $db, string $session): void
         WHERE id = ? AND NOT EXISTS (SELECT 1 FROM sessions WHERE card_id = ?)')->execute([$card, $card]);
 }
 
+// One Claude Code hook payload (hooks/claude_hook.php): keeps the session's link and its card's dot right.
+function hook_event(PDO $db, array $in): void
+{
+    $session = (string) ($in['session_id'] ?? '');
+    if ($session === '') {
+        return;
+    }
+    switch ($in['hook_event_name'] ?? '') {
+        case 'UserPromptSubmit':
+            $card = card_from_prompt((string) ($in['prompt'] ?? ''));
+            if ($card === null || !hook_link($db, $session, $card)) {
+                hook_touch($db, $session);
+            }
+            break;
+        case 'PreToolUse':
+            hook_touch($db, $session);
+            break;
+        case 'PostToolUse':
+            // Any shell tool (Bash, PowerShell) that ran board.php on card N links this session to N.
+            $card = card_from_command((string) ($in['tool_input']['command'] ?? ''));
+            if ($card === null || !hook_link($db, $session, $card)) {
+                hook_touch($db, $session);
+            }
+            break;
+        case 'Stop':
+            hook_stop($db, $session);
+            break;
+    }
+    hook_prune($db);
+}
+
 // Drops sessions unseen for 30 min (crashed or closed) and turns off dots no session holds.
 function hook_prune(PDO $db): void
 {
