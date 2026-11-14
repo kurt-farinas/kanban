@@ -1,5 +1,5 @@
 <?php
-// Claude Code hook for UserPromptSubmit, PreToolUse, PostToolUse and Stop: keeps each card's working dot right.
+// Claude Code hook for UserPromptSubmit, PreToolUse, PostToolUse, Stop and StopFailure: keeps each card's working dot right.
 // Never disturbs Claude: prints nothing (UserPromptSubmit stdout goes into Claude's context) and exits 0 on any error.
 ini_set('display_errors', '0');
 error_reporting(0);

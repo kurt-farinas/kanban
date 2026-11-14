@@ -285,6 +285,14 @@ $tests = [
         hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'UserPromptSubmit', 'prompt' => 'yes go ahead']);
         ok(card($db, $id)['working_since'] !== null, 'follow-up turn did not relight the dot');
     },
+    'stop_failure_ends_turn_like_stop' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'UserPromptSubmit', 'prompt' => "card #$id"]);
+        set_status($db, $id, 'Fixing', 'claude');
+        hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'StopFailure']);
+        $c = card($db, $id);
+        ok($c['working_since'] === null && $c['status'] === null, 'dot or status left on');
+    },
     'notify_command_escapes_and_caps' => function (PDO $db) {
         $cmd = notify_command('Card #5 needs you', "Pick \"A\" or B?\r\nNext line " . str_repeat('x', 300));
         ok(str_starts_with($cmd, 'start "" /B powershell -NoProfile -WindowStyle Hidden'), $cmd);

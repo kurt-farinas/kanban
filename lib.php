@@ -389,6 +389,7 @@ function hook_event(PDO $db, array $in): void
             }
             break;
         case 'Stop':
+        case 'StopFailure': // the turn ended on an API error
             hook_stop($db, $session);
             break;
     }

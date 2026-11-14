@@ -53,7 +53,8 @@ A card shows a pulsing dot while a Claude Code session works on it. Claude Code 
   "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "C:/xampp/php/php.exe C:/xampp/htdocs/kanban/hooks/claude_hook.php", "timeout": 5 }] }],
   "PreToolUse":  [{ "matcher": "*", "hooks": [{ "type": "command", "command": "C:/xampp/php/php.exe C:/xampp/htdocs/kanban/hooks/claude_hook.php", "timeout": 5 }] }],
   "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "C:/xampp/php/php.exe C:/xampp/htdocs/kanban/hooks/claude_hook.php", "timeout": 5 }] }],
-  "Stop":        [{ "hooks": [{ "type": "command", "command": "C:/xampp/php/php.exe C:/xampp/htdocs/kanban/hooks/claude_hook.php", "timeout": 5 }] }]
+  "Stop":        [{ "hooks": [{ "type": "command", "command": "C:/xampp/php/php.exe C:/xampp/htdocs/kanban/hooks/claude_hook.php", "timeout": 5 }] }],
+  "StopFailure": [{ "hooks": [{ "type": "command", "command": "C:/xampp/php/php.exe C:/xampp/htdocs/kanban/hooks/claude_hook.php", "timeout": 5 }] }]
 }
 ```
 
