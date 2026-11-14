@@ -538,6 +538,69 @@ $tests = [
             ok(sync_deployments($db) === 0 && card($db, $a)['col'] === 'test', 'retitled entry applied again');
         });
     },
+    'stuck_days' => function (PDO $db) {
+        // Puts the card's updated_at, notes and events $days back from the DB clock.
+        $age = function (int $id, int $days) use ($db) {
+            $db->prepare('UPDATE cards SET updated_at = NOW() - INTERVAL ? DAY WHERE id = ?')->execute([$days, $id]);
+            $db->prepare('UPDATE notes SET created_at = NOW() - INTERVAL ? DAY WHERE card_id = ?')->execute([$days, $id]);
+            $db->prepare('UPDATE events SET created_at = NOW() - INTERVAL ? DAY WHERE card_id = ?')->execute([$days, $id]);
+        };
+        $stuck = function (int $id) use ($db) {
+            foreach (list_cards($db) as $r) {
+                if ((int) $r['id'] === $id) {
+                    ok(isset($r['last_activity']), "#$id has no last_activity");
+                    return $r['stuck_days'] ?? null;
+                }
+            }
+            throw new Exception("#$id not listed");
+        };
+        $b = add_card($db, 'B', 'Alpha', 'user');
+        move_card($db, $b, 'building', 'user');
+        add_note($db, $b, 'old', 'user');
+        $age($b, 4);
+        ok($stuck($b) === 4, 'aged building card: ' . var_export($stuck($b), true));
+        $db->prepare("INSERT INTO notes (card_id, author, body, created_at) VALUES (?, 'user', 'new', NOW() - INTERVAL 1 DAY)")->execute([$b]);
+        ok($stuck($b) === 0, 'recent note: ' . var_export($stuck($b), true));
+
+        $bare = add_card($db, 'Bare', 'Alpha', 'user');
+        move_card($db, $bare, 'review', 'user');
+        $age($bare, 5);
+        $db->prepare('DELETE FROM events WHERE card_id = ?')->execute([$bare]);
+        ok($stuck($bare) === 5, 'card with no notes or events: ' . var_export($stuck($bare), true));
+
+        $t = add_card($db, 'T', 'Alpha', 'user');
+        $age($t, 10);
+        ok($stuck($t) === 0, 'todo card: ' . var_export($stuck($t), true));
+
+        $l = add_card($db, 'L', 'Alpha', 'user');
+        move_card($db, $l, 'live', 'user');
+        $age($l, 10);
+        ok($stuck($l) === 0, 'live card: ' . var_export($stuck($l), true));
+
+        $w = add_card($db, 'W', 'Alpha', 'user');
+        move_card($db, $w, 'building', 'user');
+        $age($w, 4);
+        $db->prepare('UPDATE cards SET working_since = NOW(), updated_at = updated_at WHERE id = ?')->execute([$w]);
+        ok($stuck($w) === 0, 'working card: ' . var_export($stuck($w), true));
+
+        $ev = add_card($db, 'Ev', 'Alpha', 'user');
+        move_card($db, $ev, 'building', 'user');
+        $age($ev, 4);
+        $db->prepare("INSERT INTO events (card_id, card_title, author, action, created_at) VALUES (?, 'Ev', 'user', 'moved', NOW() - INTERVAL 1 DAY)")->execute([$ev]);
+        ok($stuck($ev) === 0, 'event yesterday: ' . var_export($stuck($ev), true));
+
+        $two = add_card($db, 'Two', 'Alpha', 'user');
+        move_card($db, $two, 'building', 'user');
+        $age($two, 2);
+        ok($stuck($two) === 0, '2 days idle: ' . var_export($stuck($two), true));
+
+        foreach (['planning', 'test'] as $col) {
+            $x = add_card($db, $col, 'Alpha', 'user');
+            move_card($db, $x, $col, 'user');
+            $age($x, 4);
+            ok($stuck($x) === 4, "$col card: " . var_export($stuck($x), true));
+        }
+    },
     'board_version_tracks_newest_file' => function (PDO $db) {
         $f = dirname(__DIR__) . '/app.js';
         $old = filemtime($f);

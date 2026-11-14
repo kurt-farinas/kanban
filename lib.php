@@ -1,5 +1,7 @@
 <?php
 const COLUMNS = ['todo', 'planning', 'building', 'review', 'test', 'live'];
+const STUCK_DAYS = 3;
+const STUCK_COLUMNS = ['planning', 'building', 'review', 'test'];
 
 // Newest file time of the code the page runs; an open board reloads itself when this changes.
 function board_version(): int
@@ -13,7 +15,10 @@ const CARD_SELECT = 'SELECT c.id, c.title, c.col, c.position, c.blocked, c.block
         p.name AS project, p.color, p.folder, c.updated_by, c.updated_at,
         c.status, c.working_since, c.plan_path, c.request_id, c.live_at,
         r.kind AS request_kind, r.requester AS request_requester,
-        (SELECT COUNT(*) FROM notes n WHERE n.card_id = c.id) AS note_count
+        (SELECT COUNT(*) FROM notes n WHERE n.card_id = c.id) AS note_count,
+        GREATEST(c.updated_at, COALESCE((SELECT MAX(n.created_at) FROM notes n WHERE n.card_id = c.id), c.updated_at),
+            COALESCE((SELECT MAX(e.created_at) FROM events e WHERE e.card_id = c.id), c.updated_at)) AS last_activity,
+        NOW() AS now_at
     FROM cards c JOIN projects p ON p.id = c.project_id LEFT JOIN requests r ON r.id = c.request_id';
 const CARD_ORDER = ' ORDER BY c.col, c.position, c.id';
 
@@ -56,11 +61,22 @@ function card_col(PDO $db, int $id, bool $lock = false): string
 function list_cards(PDO $db, ?string $project = null): array
 {
     if ($project === null) {
-        return $db->query(CARD_SELECT . CARD_ORDER)->fetchAll();
+        $rows = $db->query(CARD_SELECT . CARD_ORDER)->fetchAll();
+    } else {
+        $st = $db->prepare(CARD_SELECT . ' WHERE c.project_id = ?' . CARD_ORDER);
+        $st->execute([project_id($db, $project)]);
+        $rows = $st->fetchAll();
     }
-    $st = $db->prepare(CARD_SELECT . ' WHERE c.project_id = ?' . CARD_ORDER);
-    $st->execute([project_id($db, $project)]);
-    return $st->fetchAll();
+    return array_map('with_stuck_days', $rows);
+}
+
+// Whole days since last activity, measured on the DB clock (now_at), or 0 when the card is not stuck.
+function with_stuck_days(array $card): array
+{
+    $days = (new DateTime($card['last_activity']))->diff(new DateTime($card['now_at']))->days;
+    $card['stuck_days'] = in_array($card['col'], STUCK_COLUMNS, true) && $card['working_since'] === null
+        && $days >= STUCK_DAYS ? $days : 0;
+    return $card;
 }
 
 function check_title(string $title): void

@@ -15,6 +15,8 @@
     --accent-soft: rgba(217, 119, 87, 0.16);
     --danger: #e5534b;
     --input: #2b2a28;
+    --warn: #f6cd7e;
+    --warn-soft: rgba(224, 164, 64, 0.18);
     color-scheme: dark;
 }
 
@@ -32,6 +34,8 @@
     --accent-soft: rgba(198, 97, 63, 0.12);
     --danger: #c4372f;
     --input: #ffffff;
+    --warn: #7a4a00;
+    --warn-soft: rgba(196, 128, 0, 0.14);
     color-scheme: light;
 }
 
@@ -223,10 +227,12 @@ select:focus, input:focus, textarea:focus, button:focus-visible, .card:focus-vis
 .pill[data-color="teal"] { color: #7fd6bb; background: rgba(29, 158, 117, 0.2); }
 .pill[data-color="coral"] { color: #f0a084; background: rgba(216, 90, 48, 0.2); }
 .pill[data-color="pink"] { color: #f0a3c0; background: rgba(212, 83, 126, 0.2); }
+.pill[data-color="blue"] { color: #8fbdf0; background: rgba(55, 138, 221, 0.2); }
 [data-theme="light"] .pill[data-color="purple"] { color: #3c3489; background: #eeedfe; }
 [data-theme="light"] .pill[data-color="teal"] { color: #085041; background: #e1f5ee; }
 [data-theme="light"] .pill[data-color="coral"] { color: #712b13; background: #faece7; }
 [data-theme="light"] .pill[data-color="pink"] { color: #72243e; background: #fbeaf0; }
+[data-theme="light"] .pill[data-color="blue"] { color: #0c447c; background: #e6f1fb; }
 .pill.blocked { color: #fff; background: var(--danger); cursor: help; }
 
 .add-open {
@@ -575,3 +581,28 @@ button:disabled { opacity: 0.6; cursor: default; }
 .request-actions { display: flex; align-items: center; gap: 6px; }
 .request-actions .row { flex: 1; }
 .request-actions input { flex: 1; min-width: 0; }
+
+/* Stuck: idle 3+ days in a work column. */
+.card.stuck, .card.stuck:hover { border-left: 3px solid var(--warn); }
+.pill.stuck { color: var(--warn); background: var(--warn-soft); cursor: help; }
+
+/* Compact Live row; click expands to the full card. */
+.card.compact { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+.card.compact .title-line { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.card.compact .card-id, .card.compact .live-since { flex: none; font-size: 12px; color: var(--muted); }
+.proj-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.proj-dot[data-color="purple"] { background: rgb(127, 119, 221); }
+.proj-dot[data-color="teal"] { background: rgb(29, 158, 117); }
+.proj-dot[data-color="coral"] { background: rgb(216, 90, 48); }
+.proj-dot[data-color="pink"] { background: rgb(212, 83, 126); }
+.proj-dot[data-color="blue"] { background: rgb(55, 138, 221); }
+
+/* Compact rows: the date gives way to the hover actions; the chevron toggles expand/collapse. */
+.card.compact .card-actions { position: static; display: none; }
+.card.compact:hover .card-actions, .card.compact:focus-within .card-actions { display: flex; }
+.card.compact:hover .live-since, .card.compact:focus-within .live-since { display: none; }
+.card.compact .blocked-mini { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); cursor: help; }
+.live-toggle { flex: none; padding: 0 4px; font-size: 14px; line-height: 1; color: var(--muted); background: none; border: 0; cursor: pointer; }
+.live-toggle:hover { color: var(--text); }
+.card:not(.compact) .live-toggle { position: absolute; top: 8px; right: 62px; }
+@media (hover: none) { .card.compact .card-actions { display: flex; } .card.compact .live-since { display: none; } }

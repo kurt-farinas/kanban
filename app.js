@@ -381,12 +381,90 @@ const KINDS = { do: 'Do', change: 'Change', remove: 'Remove' };
 // "2026-11-12" -> "12 Nov"
 const shortDate = d => new Date(d + 'T00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
+// Live cards show as one-line rows; ids expanded by this viewer are kept in localStorage.
+const LIVE_KEY = 'kanban.liveExpanded';
+const liveExpanded = new Set((() => {
+    try {
+        const ids = JSON.parse(localStorage.getItem(LIVE_KEY));
+        return Array.isArray(ids) ? ids.map(String) : [];
+    } catch {
+        return [];
+    }
+})());
+
+function saveExpanded() {
+    try { localStorage.setItem(LIVE_KEY, JSON.stringify([...liveExpanded])); } catch { /* private mode: in-memory only */ }
+}
+
+// Drops ids that are no longer Live. Under a project filter, cards of other projects are not in the list: keep theirs.
+function pruneExpanded(list, all) {
+    const live = new Set(list.filter(c => c.col === 'live').map(c => String(c.id)));
+    const listed = new Set(list.map(c => String(c.id)));
+    const before = liveExpanded.size;
+    for (const id of liveExpanded) {
+        if (!live.has(id) && (all || listed.has(id))) liveExpanded.delete(id);
+    }
+    if (liveExpanded.size !== before) saveExpanded();
+}
+
+// Rebuilds inside the same element, so a double-click's second click still lands on the card.
+function toggleLive(card, fromButton = false) {
+    const id = card.dataset.id;
+    if (!liveExpanded.delete(id)) liveExpanded.add(id);
+    saveExpanded();
+    const fresh = cardEl(cards.get(id));
+    card.className = fresh.className;
+    card.title = fresh.title;
+    card.replaceChildren(...fresh.childNodes);
+    if (fromButton) card.querySelector('.live-toggle').focus();
+}
+
+function liveToggle(c, expanded) {
+    const b = el('button', 'live-toggle', expanded ? '▴' : '▾');
+    b.type = 'button';
+    b.setAttribute('aria-expanded', String(expanded));
+    b.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} card #${c.id}`);
+    b.title = expanded ? 'Collapse' : 'Expand';
+    return b;
+}
+
+function actionsEl(c) {
+    const actions = el('div', 'card-actions');
+    for (const [act, icon, verb] of [['edit', '✎', 'Edit'], ['delete', '🗑', 'Delete']]) {
+        const b = el('button', 'card-act', icon);
+        b.type = 'button';
+        b.dataset.act = act;
+        b.setAttribute('aria-label', `${verb} card #${c.id}`);
+        actions.append(b);
+    }
+    return actions;
+}
+
 function cardEl(c) {
-    const card = el('article', 'card');
+    const live = c.col === 'live';
+    const expanded = live && liveExpanded.has(String(c.id));
+    const card = el('article', live && !expanded ? 'card compact' : 'card');
     card.draggable = true;
     card.tabIndex = 0;
     card.dataset.id = c.id;
-    card.title = 'Click for details · drag to move · right-click for more';
+    card.title = (live && !expanded ? 'Click to expand' : 'Click for details') + ' · drag to move · right-click for more';
+    if (live && !expanded) {
+        const dot = el('span', 'proj-dot');
+        dot.dataset.color = c.color;
+        dot.title = c.project;
+        const line = el('span', 'title-line', c.title);
+        line.title = c.title;
+        card.append(dot, el('span', 'card-id', `#${c.id}`), line);
+        if (c.blocked) {
+            const b = el('span', 'blocked-mini');
+            b.title = `Blocked: ${c.blocked_reason || ''}`;
+            card.append(b);
+        }
+        if (c.live_at) card.append(el('span', 'live-since', shortDate(c.live_at)));
+        card.append(liveToggle(c, false), actionsEl(c));
+        return card;
+    }
+    if (c.stuck_days > 0) card.classList.add('stuck');
     const title = el('div', 'title');
     if (isWorking(c)) {
         const dot = el('span', 'dot');
@@ -412,27 +490,26 @@ function cardEl(c) {
         b.title = c.blocked_reason || '';
         tags.append(b);
     }
+    if (c.stuck_days > 0) {
+        const s = el('span', 'pill stuck', `Stuck ${c.stuck_days}d`);
+        s.title = `No activity for ${c.stuck_days} days`;
+        tags.append(s);
+    }
     if (c.note_count > 0) {
         const n = el('span', 'note-count', `✎ ${c.note_count}`);
         n.title = c.note_count === 1 ? '1 note' : `${c.note_count} notes`;
         tags.append(n);
     }
     card.append(tags);
-    const actions = el('div', 'card-actions');
-    for (const [act, icon, verb] of [['edit', '✎', 'Edit'], ['delete', '🗑', 'Delete']]) {
-        const b = el('button', 'card-act', icon);
-        b.type = 'button';
-        b.dataset.act = act;
-        b.setAttribute('aria-label', `${verb} card #${c.id}`);
-        actions.append(b);
-    }
-    card.append(actions);
+    if (live) card.append(liveToggle(c, true));
+    card.append(actionsEl(c));
     return card;
 }
 
 function render(data) {
     fillProjects(data.projects);
     cards = new Map(data.cards.map(c => [String(c.id), c]));
+    pruneExpanded(data.cards, filter.value === '');
     const shown = data.cards.filter(c => !pendingDeletes.has(String(c.id)));
     for (const section of document.querySelectorAll('.column')) {
         const mine = shown.filter(c => c.col === section.dataset.col);
@@ -664,24 +741,35 @@ board.addEventListener('dragend', () => {
 // A button inside a draggable card would start the card's drag, so switch dragging off while it is pressed.
 board.addEventListener('pointerdown', e => {
     const card = e.target.closest('.card');
-    if (card && e.target.closest('.card-actions')) {
+    if (card && e.target.closest('.card-actions, .live-toggle')) {
         card.draggable = false;
         document.addEventListener('pointerup', () => { card.draggable = true; }, { once: true });
     }
 });
 
+let expandedByClick = null; // compact card the last click expanded, to spot a double-click's second click
+
 board.addEventListener('click', e => {
     const card = e.target.closest('.card');
     if (!card || dragged) return;
     const act = e.target.closest('.card-act');
-    if (!act) openPanel(card.dataset.id);
+    if (e.target.closest('.live-toggle')) toggleLive(card, true);
+    else if (!act && card.classList.contains('compact')) {
+        toggleLive(card);
+        expandedByClick = card;
+    } else if (!act && e.detail === 2 && expandedByClick === card) {
+        // Second click of a double-click on a compact row: fold it back and edit, as a double-click does elsewhere.
+        expandedByClick = null;
+        toggleLive(card);
+        openPanel(card.dataset.id, true);
+    } else if (!act) openPanel(card.dataset.id);
     else if (act.dataset.act === 'edit') openPanel(card.dataset.id, true);
     else deleteCard(card.dataset.id);
 });
 
 board.addEventListener('dblclick', e => {
     const card = e.target.closest('.card');
-    if (card && !e.target.closest('.card-actions')) openPanel(card.dataset.id, true);
+    if (card && !e.target.closest('.card-actions, .live-toggle')) openPanel(card.dataset.id, true);
 });
 
 board.addEventListener('contextmenu', e => {
@@ -753,7 +841,8 @@ board.addEventListener('keydown', e => {
     const card = e.target.closest('.card');
     if (card && e.target === card && (e.key === 'Enter' || e.key === ' ')) {
         e.preventDefault();
-        openPanel(card.dataset.id);
+        if (card.classList.contains('compact')) toggleLive(card);
+        else openPanel(card.dataset.id);
     }
 });
 
