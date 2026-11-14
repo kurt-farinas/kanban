@@ -213,6 +213,17 @@ $tests = [
         $got = array_map(fn($e) => "{$e['action']}:{$e['author']}:{$e['card_title']}", list_events($db));
         ok($got === ['note:user:A', 'moved:claude:A', 'added:user:A'], implode(',', $got));
     },
+    'events_after_returns_only_newer_oldest_first' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        move_card($db, $id, 'building', 'claude');
+        add_note($db, $id, 'done', 'user');
+        $first = (int) min(array_column(list_events($db), 'id'));
+        $got = list_events($db, 50, $first);
+        $ids = array_map('intval', array_column($got, 'id'));
+        ok(count($got) === 2, 'got ' . count($got) . ' events');
+        ok($ids[0] > $first && $ids[0] < $ids[1], 'ids ' . implode(',', $ids));
+        ok(array_column($got, 'action') === ['moved', 'note'], implode(',', array_column($got, 'action')));
+    },
     'same_place_move_logs_nothing' => function (PDO $db) {
         $a = add_card($db, 'A', 'Alpha', 'user');
         $b = add_card($db, 'B', 'Alpha', 'user');

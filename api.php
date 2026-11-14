@@ -1,6 +1,6 @@
 <?php
 // JSON API for the web board.
-// GET: a=list[&project=Name], a=card&id=N (card + notes), a=events (50 newest), a=plan&id=N (markdown).
+// GET: a=list[&project=Name], a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown).
 // POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project), a=delete (id), a=note (id, body).
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
@@ -65,7 +65,7 @@ try {
             $id = int_param('id');
             out(['card' => get_card($db, $id), 'notes' => list_notes($db, $id)]);
         case 'events':
-            out(['events' => list_events($db)]);
+            out(['events' => list_events($db, 50, int_param('after', true))]);
         case 'plan':
             $card = get_card($db, int_param('id'));
             if ($card['plan_path'] === null || !is_file($card['plan_path'])) {

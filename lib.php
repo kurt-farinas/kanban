@@ -202,10 +202,16 @@ function set_plan(PDO $db, int $id, string $path, string $by): void
     });
 }
 
-function list_events(PDO $db, int $limit = 50): array
+// With $after: only events newer than that id, oldest first (for polling); without: the newest, newest first.
+function list_events(PDO $db, int $limit = 50, ?int $after = null): array
 {
-    return $db->query('SELECT id, card_id, card_title, author, action, detail, created_at FROM events
-        ORDER BY id DESC LIMIT ' . max(1, $limit))->fetchAll();
+    $sql = 'SELECT id, card_id, card_title, author, action, detail, created_at FROM events';
+    if ($after !== null) {
+        $st = $db->prepare("$sql WHERE id > ? ORDER BY id LIMIT " . max(1, $limit));
+        $st->execute([$after]);
+        return $st->fetchAll();
+    }
+    return $db->query("$sql ORDER BY id DESC LIMIT " . max(1, $limit))->fetchAll();
 }
 
 function move_card(PDO $db, int $id, string $col, string $by, ?int $position = null): void
