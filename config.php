@@ -12,6 +12,7 @@ function db(?string $name = null): PDO
     return new PDO($dsn, $c['user'], $c['pass'], [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_TIMEOUT => 2, // seconds to connect; the Claude hooks must never hang
         // XAMPP's default sql_mode silently truncates bad data; fail loudly instead.
         PDO::MYSQL_ATTR_INIT_COMMAND => "SET sql_mode = 'STRICT_ALL_TABLES'",
     ]);

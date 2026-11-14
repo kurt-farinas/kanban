@@ -272,6 +272,9 @@ function set_blocked(PDO $db, int $id, ?string $reason, string $by): void
             ->execute([(int) $blocked, $blocked ? $reason : null, $by, $id]);
         log_event($db, $id, $by, $blocked ? 'blocked' : 'unblocked', $blocked ? $reason : '');
     });
+    if ($blocked) {
+        notify("Card #$id needs you", $reason);
+    }
 }
 
 function find_cards(PDO $db, string $text): array
@@ -294,4 +297,77 @@ function claude_link(array $card, string $folder): ?string
     }
     $prompt = mb_substr("$verb #{$card['id']} ({$card['project']}): {$card['title']}", 0, 4000);
     return 'claude://code/new?prompt=' . rawurlencode($prompt) . '&folder=' . rawurlencode($folder);
+}
+
+// Windows notification through notify/toast.ps1, started in the background so the caller never waits.
+function notify_command(string $title, string $body): string
+{
+    $clean = fn(string $s) => mb_substr(trim(preg_replace('/\s+/u', ' ', $s)), 0, 200);
+    return 'start "" /B powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        . escapeshellarg(__DIR__ . '/notify/toast.ps1')
+        . ' -Title ' . escapeshellarg($clean($title)) . ' -Body ' . escapeshellarg($clean($body)) . ' >NUL 2>&1';
+}
+
+// The test runner sets KANBAN_NO_NOTIFY.
+function notify(string $title, string $body): void
+{
+    if (getenv('KANBAN_NO_NOTIFY') === false) {
+        pclose(popen(notify_command($title, $body), 'r'));
+    }
+}
+
+// Claude Code hooks (hooks/claude_hook.php) keep sessions = which Claude session works on which card.
+function card_from_prompt(string $prompt): ?int
+{
+    return preg_match('/\bcard #(\d{1,9})\b/i', $prompt, $m) ? (int) $m[1] : null;
+}
+
+// A command that runs "board.php <cmd> N ..." names card N.
+function card_from_command(string $command): ?int
+{
+    return preg_match('/board\.php["\']?\s+[a-z]+\s+["\']?(\d{1,9})\b/i', $command, $m) ? (int) $m[1] : null;
+}
+
+// Links the session to the card and lights the card's dot; false if there is no such card.
+function hook_link(PDO $db, string $session, int $card): bool
+{
+    $st = $db->prepare('SELECT 1 FROM cards WHERE id = ?');
+    $st->execute([$card]);
+    if (!$st->fetchColumn()) {
+        return false;
+    }
+    $db->prepare('INSERT INTO sessions (session_id, card_id, seen_at) VALUES (?, ?, NOW())
+        ON DUPLICATE KEY UPDATE card_id = VALUES(card_id), seen_at = NOW()')->execute([$session, $card]);
+    hook_touch($db, $session);
+    return true;
+}
+
+// Refreshes a linked session and its card's dot; an unlinked session does nothing.
+function hook_touch(PDO $db, string $session): void
+{
+    $db->prepare('UPDATE sessions s JOIN cards c ON c.id = s.card_id
+        SET s.seen_at = NOW(), c.working_since = NOW(), c.updated_at = c.updated_at WHERE s.session_id = ?')
+        ->execute([$session]);
+}
+
+// Ends the session; the card's dot and status go off once no other session works on it.
+function hook_stop(PDO $db, string $session): void
+{
+    $st = $db->prepare('SELECT card_id FROM sessions WHERE session_id = ?');
+    $st->execute([$session]);
+    $card = $st->fetchColumn();
+    if ($card === false) {
+        return;
+    }
+    $db->prepare('DELETE FROM sessions WHERE session_id = ?')->execute([$session]);
+    $db->prepare('UPDATE cards SET working_since = NULL, status = NULL, updated_at = updated_at
+        WHERE id = ? AND NOT EXISTS (SELECT 1 FROM sessions WHERE card_id = ?)')->execute([$card, $card]);
+}
+
+// Drops sessions unseen for 30 min (crashed or closed) and turns off dots no session holds.
+function hook_prune(PDO $db): void
+{
+    $db->exec('DELETE FROM sessions WHERE seen_at < NOW() - INTERVAL 30 MINUTE');
+    $db->exec('UPDATE cards c SET working_since = NULL, status = NULL, updated_at = updated_at
+        WHERE working_since IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.card_id = c.id)');
 }

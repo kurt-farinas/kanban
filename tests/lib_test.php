@@ -2,6 +2,7 @@
 // Plain test runner: php tests/lib_test.php. Rebuilds database kanban_test from schema.sql + seed.example.sql each run.
 require dirname(__DIR__) . '/config.php';
 require dirname(__DIR__) . '/lib.php';
+putenv('KANBAN_NO_NOTIFY=1');
 
 function ok(bool $cond, string $msg): void
 {
@@ -211,6 +212,74 @@ $tests = [
         add_note($db, $id, 'done', 'user');
         $got = array_map(fn($e) => "{$e['action']}:{$e['author']}:{$e['card_title']}", list_events($db));
         ok($got === ['note:user:A', 'moved:claude:A', 'added:user:A'], implode(',', $got));
+    },
+    'card_from_prompt_and_command' => function (PDO $db) {
+        ok(card_from_prompt('/feature-planner Plan card #12 (Alpha): x') === 12, 'prompt link');
+        ok(card_from_prompt('see CARD #7, thanks') === 7, 'case-insensitive');
+        ok(card_from_prompt('cards #7 and #8') === null && card_from_prompt('discard #7') === null, 'not card #N');
+        $php = 'C:\xampp\php\php.exe C:\xampp\htdocs\kanban\board.php';
+        ok(card_from_command("$php move 21 review") === 21, 'move');
+        ok(card_from_command("$php status 4 \"Fixing\"") === 4, 'status');
+        ok(card_from_command("'$php' note '9' \"x\"") === 9, 'quoted');
+        ok(card_from_command("$php add \"Fix 3 bugs\" Alpha") === null, 'add has no id');
+        ok(card_from_command('git log -3') === null, 'not board.php');
+    },
+    'hook_link_lights_dot_and_stop_clears' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        ok(hook_link($db, 's1', $id), 'link refused');
+        ok(card($db, $id)['working_since'] !== null, 'dot not on');
+        set_status($db, $id, 'Fixing', 'claude');
+        hook_stop($db, 's1');
+        $c = card($db, $id);
+        ok($c['working_since'] === null && $c['status'] === null, 'dot or status left on');
+        ok($db->query('SELECT COUNT(*) FROM sessions')->fetchColumn() == 0, 'session row left');
+        ok(!hook_link($db, 's2', 9999), 'linked unknown card');
+        hook_touch($db, 'nobody');
+        hook_stop($db, 'nobody');
+        ok(count(list_events($db)) === 1, 'hooks logged events');
+    },
+    'hook_two_sessions_keep_dot_until_both_stop' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        hook_link($db, 's1', $id);
+        hook_link($db, 's2', $id);
+        hook_stop($db, 's1');
+        ok(card($db, $id)['working_since'] !== null, 'dot off while s2 works');
+        hook_stop($db, 's2');
+        ok(card($db, $id)['working_since'] === null, 'dot on after both stopped');
+    },
+    'hook_touch_refreshes_linked_session' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        hook_link($db, 's1', $id);
+        $db->exec("UPDATE sessions SET seen_at = '2020-01-01'");
+        $db->exec("UPDATE cards SET working_since = '2020-01-01'");
+        $before = card($db, $id)['updated_at'];
+        hook_touch($db, 's1');
+        ok($db->query('SELECT seen_at FROM sessions')->fetchColumn() > '2020-01-02', 'seen_at not refreshed');
+        $c = card($db, $id);
+        ok($c['working_since'] > '2020-01-02', 'working_since not refreshed');
+        ok($c['updated_at'] === $before, 'updated_at changed');
+    },
+    'hook_prune_drops_stale_sessions_and_orphan_dots' => function (PDO $db) {
+        $a = add_card($db, 'A', 'Alpha', 'user');
+        $b = add_card($db, 'B', 'Alpha', 'user');
+        $c = add_card($db, 'C', 'Alpha', 'user');
+        hook_link($db, 'old', $a);
+        hook_link($db, 'fresh', $b);
+        $db->exec("UPDATE sessions SET seen_at = NOW() - INTERVAL 31 MINUTE WHERE session_id = 'old'");
+        hook_link($db, 'moved', $c);
+        hook_link($db, 'moved', $b); // relinked: C is left with no session
+        hook_prune($db);
+        ok(card($db, $a)['working_since'] === null, 'stale dot left on');
+        ok(card($db, $c)['working_since'] === null, 'orphan dot left on');
+        ok(card($db, $b)['working_since'] !== null, 'live dot turned off');
+        $left = $db->query('SELECT session_id FROM sessions ORDER BY session_id')->fetchAll(PDO::FETCH_COLUMN);
+        ok($left === ['fresh', 'moved'], implode(',', $left));
+    },
+    'notify_command_escapes_and_caps' => function (PDO $db) {
+        $cmd = notify_command('Card #5 needs you', "Pick \"A\" or B?\r\nNext line " . str_repeat('x', 300));
+        ok(str_starts_with($cmd, 'start "" /B powershell -NoProfile -WindowStyle Hidden'), $cmd);
+        ok(str_contains($cmd, 'toast.ps1" -Title "Card #5 needs you" -Body "Pick  A  or B? Next line x'), $cmd);
+        ok(!str_contains($cmd, "\n") && !str_contains($cmd, 'x' . str_repeat('x', 200)), 'newline or no cap');
     },
 ];
 

@@ -44,6 +44,23 @@ Upgrading from v1: back up, then `C:\xampp\mysql\bin\mysql.exe -uroot kanban < m
 
 To have Claude keep the board current, add a rule to your `~/.claude/CLAUDE.md` telling it to run these commands as work moves on.
 
+## Working dot (hooks)
+
+A card shows a pulsing dot while a Claude Code session works on it. Claude Code hooks run `hooks/claude_hook.php`, which links a session to card N when the prompt contains `card #N` (the board's links do) or when Claude runs `board.php <cmd> N`, and turns the dot and status off when the session stops (or after 30 min unseen). Add one entry per event to `~/.claude/settings.json`, next to any hooks you already have:
+
+```json
+"hooks": {
+  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "C:/xampp/php/php.exe C:/xampp/htdocs/kanban/hooks/claude_hook.php", "timeout": 5 }] }],
+  "PreToolUse":  [{ "matcher": "*", "hooks": [{ "type": "command", "command": "C:/xampp/php/php.exe C:/xampp/htdocs/kanban/hooks/claude_hook.php", "timeout": 5 }] }],
+  "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "C:/xampp/php/php.exe C:/xampp/htdocs/kanban/hooks/claude_hook.php", "timeout": 5 }] }],
+  "Stop":        [{ "hooks": [{ "type": "command", "command": "C:/xampp/php/php.exe C:/xampp/htdocs/kanban/hooks/claude_hook.php", "timeout": 5 }] }]
+}
+```
+
+The hook prints nothing and always exits 0, so a stopped MySQL never gets in Claude's way.
+
+Blocking a card (from the page or `board.php block`) also shows a Windows notification, "Card #N needs you", through `notify/toast.ps1`. Set the environment variable `KANBAN_NO_NOTIFY` to turn it off.
+
 ## How the Claude link works
 
 Dropping a card into Planning, Building, Review or Live opens
