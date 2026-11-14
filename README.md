@@ -73,7 +73,11 @@ Dropping a card into Planning, Building, Review or Live opens
 
 ## Backups
 
-`php board.php backup` saves the database to `%USERPROFILE%\KanbanBackups\kanban-YYYY-MM-DD.sql`, once a day, keeping the newest 7. It runs by itself at login (`autostart/open-kanban.vbs`) and when a Claude turn ends with no backup for today yet (the Stop hook). When MySQL is off it skips quietly; when a dump fails you get a toast.
+`php board.php backup` saves the database to `%USERPROFILE%\KanbanBackups\kanban-YYYY-MM-DD.sql`, once a day, keeping the newest 7. It runs by itself at login (`autostart/open-kanban.vbs`), every day at 5 PM through a Windows scheduled task, and when a Claude turn ends with no backup for today yet (the Stop hook). The 5 PM task is skipped if the PC is off or asleep then; the other two catch up. Create the task with:
+
+```
+schtasks /Create /SC DAILY /ST 17:00 /TN "Kanban backup" /TR "wscript.exe \"C:\xampp\htdocs\kanban\autostart\backup.vbs\""
+``` When MySQL is off it skips quietly; when a dump fails you get a toast.
 
 Restore a backup (this replaces the board's current data):
 
