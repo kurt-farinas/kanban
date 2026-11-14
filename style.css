@@ -610,6 +610,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .live-toggle { flex: none; padding: 0 4px; font-size: 14px; line-height: 1; color: var(--muted); background: none; border: 0; cursor: pointer; }
 .live-toggle:hover { color: var(--text); }
 .card:not(.compact) .live-toggle { position: absolute; top: 8px; right: 62px; }
+.card.has-chat:not(.compact) .live-toggle { right: 96px; } /* clears the third (Open chat) action button */
 @media (hover: none) { .card.compact .card-actions { display: flex; } }
 
 /* Section pill: neutral outline, so it never reads as a project color. */

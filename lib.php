@@ -16,7 +16,7 @@ const CARD_SELECT = 'SELECT c.id, c.title, c.col, c.position, c.blocked, c.block
         c.status, c.working_since, c.plan_path, c.request_id, c.live_at, c.section_id, s.name AS section,
         r.kind AS request_kind, r.requester AS request_requester,
         (SELECT COUNT(*) FROM notes n WHERE n.card_id = c.id) AS note_count,
-        EXISTS (SELECT 1 FROM sessions cs WHERE cs.card_id = c.id) AS has_chat,
+        EXISTS (SELECT 1 FROM chat_links cl WHERE cl.card_id = c.id) AS has_chat,
         GREATEST(c.updated_at, COALESCE((SELECT MAX(n.created_at) FROM notes n WHERE n.card_id = c.id), c.updated_at),
             COALESCE((SELECT MAX(e.created_at) FROM events e WHERE e.card_id = c.id), c.updated_at)) AS last_activity,
         NOW() AS now_at
@@ -636,7 +636,8 @@ function chat_sessions_dirs(): array
 // A chat continued under a new CLI id keeps the old ones in priorCliSessionIds.
 function find_chat(PDO $db, int $card): ?array
 {
-    $st = $db->prepare('SELECT session_id FROM sessions WHERE card_id = ? ORDER BY seen_at DESC');
+    // linked_at, not seen_at: the chat that last linked this card wins, not whichever touched it last.
+    $st = $db->prepare('SELECT session_id FROM chat_links WHERE card_id = ? ORDER BY linked_at DESC');
     $st->execute([$card]);
     $sessions = $st->fetchAll(PDO::FETCH_COLUMN);
     $chats = []; // CLI session id => chat
@@ -694,7 +695,9 @@ function notify(string $title, string $body): void
 // Claude Code hooks (hooks/claude_hook.php) keep sessions = which Claude session works on which card.
 function card_from_prompt(string $prompt): ?int
 {
-    return preg_match('/\bcard #(\d{1,9})\b/i', $prompt, $m) ? (int) $m[1] : null;
+    // Only the prompts the board builds (claude_link, app.js planLink): a prompt that merely mentions a card must not link.
+    $verbs = '\/feature-planner Plan card|Build the plan for card|Review the code for card|Deploy card|Update the plan for card';
+    return preg_match("/^\s*(?:$verbs) #(\d{1,9})\b/", $prompt, $m) ? (int) $m[1] : null;
 }
 
 // Only "board.php status N ..." links the session to card N: other commands (move, note, section) often touch other cards.
@@ -713,6 +716,9 @@ function hook_link(PDO $db, string $session, int $card): bool
     }
     $db->prepare('INSERT INTO sessions (session_id, card_id, seen_at) VALUES (?, ?, NOW())
         ON DUPLICATE KEY UPDATE card_id = VALUES(card_id), seen_at = NOW(), active = 1')->execute([$session, $card]);
+    // Separate from sessions so the card keeps its Open chat button after the chat moves on to another card.
+    $db->prepare('INSERT INTO chat_links (card_id, session_id) VALUES (?, ?)
+        ON DUPLICATE KEY UPDATE linked_at = NOW()')->execute([$card, $session]);
     hook_touch($db, $session);
     return true;
 }
@@ -774,8 +780,9 @@ function hook_event(PDO $db, array $in): void
 // Drops sessions unseen for a day; turns off dots with no active session seen in 30 min (crashed, closed or relinked).
 function hook_prune(PDO $db): void
 {
+    $db->exec('DELETE FROM sessions WHERE seen_at < NOW() - INTERVAL 24 HOUR');
     // Kept for months: the card's Open chat button finds its chat through these rows.
-    $db->exec('DELETE FROM sessions WHERE seen_at < NOW() - INTERVAL 180 DAY');
+    $db->exec('DELETE FROM chat_links WHERE linked_at < NOW() - INTERVAL 180 DAY');
     $db->exec('UPDATE cards c SET working_since = NULL, status = NULL, updated_at = updated_at
         WHERE working_since IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sessions s
             WHERE s.card_id = c.id AND s.active = 1 AND s.seen_at >= NOW() - INTERVAL 30 MINUTE)');

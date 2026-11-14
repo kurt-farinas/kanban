@@ -459,6 +459,7 @@ function cardEl(c) {
     const live = c.col === 'live';
     const expanded = live && liveExpanded.has(String(c.id));
     const card = el('article', live && !expanded ? 'card compact' : 'card');
+    if (c.has_chat) card.classList.add('has-chat'); // a third action button: the chevron moves over (style.css)
     card.draggable = true;
     card.tabIndex = 0;
     card.dataset.id = c.id;

@@ -77,6 +77,15 @@ CREATE TABLE sessions (
     FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Every chat that linked a card, kept 180 days for the card's Open chat button (sessions keeps only the current card for a day).
+CREATE TABLE chat_links (
+    card_id INT NOT NULL,
+    session_id VARCHAR(100) NOT NULL,
+    linked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (card_id, session_id),
+    FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Last DEPLOYMENTS.md mtime and size parsed per file.
 CREATE TABLE deploy_sync (
     file VARCHAR(500) PRIMARY KEY,

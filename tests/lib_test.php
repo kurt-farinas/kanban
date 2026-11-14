@@ -99,9 +99,9 @@ function chat(string $id, string $cli, array $more = []): array
     return array_merge(['sessionId' => "local_$id", 'cliSessionId' => $cli, 'title' => "Chat $id", 'isArchived' => false], $more);
 }
 
-function link_session(PDO $db, string $session, int $card, string $seen): void
+function link_session(PDO $db, string $session, int $card, string $linked): void
 {
-    $db->prepare('INSERT INTO sessions (session_id, card_id, seen_at, active) VALUES (?, ?, ?, 0)')->execute([$session, $card, $seen]);
+    $db->prepare('INSERT INTO chat_links (card_id, session_id, linked_at) VALUES (?, ?, ?)')->execute([$card, $session, $linked]);
 }
 
 $tests = [
@@ -300,8 +300,16 @@ $tests = [
         ok(col_order($db) === ['0:B', '1:A'] && count(list_events($db)) === 3, 'real reorder not done or not logged');
     },
     'card_from_prompt_and_command' => function (PDO $db) {
-        ok(card_from_prompt('/feature-planner Plan card #12 (Alpha): x') === 12, 'prompt link');
-        ok(card_from_prompt('see CARD #7, thanks') === 7, 'case-insensitive');
+        // Only the prompts the board builds link, at the start (leading whitespace allowed).
+        ok(card_from_prompt('/feature-planner Plan card #12 (Alpha): x') === 12, 'plan prompt');
+        ok(card_from_prompt('Build the plan for card #13 (Alpha): x') === 13, 'build prompt');
+        ok(card_from_prompt('Review the code for card #14 (Alpha): x') === 14, 'review prompt');
+        ok(card_from_prompt('Deploy card #15 (Alpha): x') === 15, 'deploy prompt');
+        ok(card_from_prompt("\n  Update the plan for card #16 (Alpha): x") === 16, 'update plan prompt');
+        ok(card_from_prompt('Deploy card #1500') === 1500 && card_from_prompt('Deploy card #15x') === null, 'id boundary');
+        // A prompt that only mentions a card (a message to a subagent, say) must not link this chat.
+        ok(card_from_prompt('Look at card #21 please') === null, 'mention links');
+        ok(card_from_prompt('Then: Review the code for card #21 (Alpha)') === null, 'mid-sentence verb links');
         ok(card_from_prompt('cards #7 and #8') === null && card_from_prompt('discard #7') === null, 'not card #N');
         $php = 'C:\xampp\php\php.exe C:\xampp\htdocs\kanban\board.php';
         ok(card_from_command("$php status 4 \"Fixing\"") === 4, 'status');
@@ -340,7 +348,7 @@ $tests = [
         ok(find_chat($db, $id) === null, 'chat for a card with no sessions');
         link_session($db, 'cli-1', $id, '2026-01-01 10:00:00');
         with_chats([
-            'local_bad.json' => '{not json',
+            'local_bad.json' => '{"cliSessionId":"cli-1",', // holds the id, so it reaches json_decode
             'local_evil.json' => chat('x"y', 'cli-1'), // id the app would refuse
             'local_two.json' => chat('two', 'cli-2', ['priorCliSessionIds' => ['cli-0', 'cli-1']]),
         ], function () use ($db, $id) {
@@ -393,7 +401,7 @@ $tests = [
         hook_link($db, 'fresh', $b);
         hook_link($db, 'day_old', $b);
         $db->exec("UPDATE sessions SET seen_at = NOW() - INTERVAL 31 MINUTE WHERE session_id = 'old'");
-        $db->exec("UPDATE sessions SET seen_at = NOW() - INTERVAL 181 DAY WHERE session_id = 'day_old'");
+        $db->exec("UPDATE sessions SET seen_at = NOW() - INTERVAL 25 HOUR WHERE session_id = 'day_old'");
         hook_link($db, 'moved', $c);
         hook_link($db, 'moved', $b); // relinked: C is left with no session
         hook_prune($db);
@@ -401,11 +409,40 @@ $tests = [
         ok(card($db, $c)['working_since'] === null, 'orphan dot left on');
         ok(card($db, $b)['working_since'] !== null, 'live dot turned off');
         $left = $db->query('SELECT session_id FROM sessions ORDER BY session_id')->fetchAll(PDO::FETCH_COLUMN);
-        ok($left === ['fresh', 'moved', 'old'], implode(',', $left)); // kept 180 days: follow-up turns relight, Open chat finds the chat
+        ok($left === ['fresh', 'moved', 'old'], implode(',', $left)); // kept a day so a follow-up turn relights
+        // The pruned session's chat link stays for Open chat; a link 181 days old goes.
+        $links = fn() => $db->query("SELECT CONCAT(session_id, '>', card_id) FROM chat_links ORDER BY 1")->fetchAll(PDO::FETCH_COLUMN);
+        ok(in_array("day_old>$b", $links(), true), 'chat link pruned with its session: ' . implode(',', $links()));
+        $db->exec("UPDATE chat_links SET linked_at = NOW() - INTERVAL 181 DAY WHERE session_id = 'day_old'");
+        $db->exec("UPDATE chat_links SET linked_at = NOW() - INTERVAL 179 DAY WHERE session_id = 'old'");
+        hook_prune($db);
+        ok($links() === ["fresh>$b", "moved>$b", "moved>$c", "old>$a"], implode(',', $links()));
+    },
+    'chat_keeps_earlier_card_after_moving_on' => function (PDO $db) {
+        $a = add_card($db, 'A', 'Alpha', 'user');
+        $b = add_card($db, 'B', 'Alpha', 'user');
+        hook_event($db, ['session_id' => 'cli-1', 'hook_event_name' => 'UserPromptSubmit', 'prompt' => "Build the plan for card #$a (Alpha): A"]);
+        $php = 'C:\xampp\php\php.exe C:\xampp\htdocs\kanban\board.php';
+        hook_event($db, ['session_id' => 'cli-1', 'hook_event_name' => 'PostToolUse', 'tool_input' => ['command' => "$php status $b \"x\""]]);
+        ok(get_card($db, $a)['has_chat'] === 1 && get_card($db, $b)['has_chat'] === 1, 'has_chat lost on the earlier card');
+        with_chats(['local_one.json' => chat('one', 'cli-1')], function () use ($db, $a, $b) {
+            ok(find_chat($db, $a)['id'] === 'local_one', 'earlier card: ' . json_encode(find_chat($db, $a)));
+            ok(find_chat($db, $b)['id'] === 'local_one', 'later card: ' . json_encode(find_chat($db, $b)));
+        });
+    },
+    'find_chat_prefers_last_linked_over_last_seen' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        link_session($db, 'cli-linker', $id, '2026-01-01 11:00:00');
+        link_session($db, 'cli-toucher', $id, '2026-01-01 10:00:00');
+        // The toucher ran on this card later (seen_at), but the linker linked it last.
+        $db->exec("INSERT INTO sessions (session_id, card_id, seen_at, active) VALUES ('cli-toucher', $id, '2026-01-01 12:00:00', 0)");
+        with_chats(['local_l.json' => chat('l', 'cli-linker'), 'local_t.json' => chat('t', 'cli-toucher')], function () use ($db, $id) {
+            ok(find_chat($db, $id)['id'] === 'local_l', json_encode(find_chat($db, $id)));
+        });
     },
     'follow_up_turn_relights_dot' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');
-        hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'UserPromptSubmit', 'prompt' => "Plan card #$id"]);
+        hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'UserPromptSubmit', 'prompt' => "/feature-planner Plan card #$id (Alpha): A"]);
         hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'Stop']);
         ok(card($db, $id)['working_since'] === null, 'dot on after Stop');
         hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'UserPromptSubmit', 'prompt' => 'yes go ahead']);
@@ -413,7 +450,7 @@ $tests = [
     },
     'stop_failure_ends_turn_like_stop' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');
-        hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'UserPromptSubmit', 'prompt' => "card #$id"]);
+        hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'UserPromptSubmit', 'prompt' => "Deploy card #$id (Alpha): A"]);
         set_status($db, $id, 'Fixing', 'claude');
         hook_event($db, ['session_id' => 's1', 'hook_event_name' => 'StopFailure']);
         $c = card($db, $id);
