@@ -16,6 +16,7 @@ const CARD_SELECT = 'SELECT c.id, c.title, c.col, c.position, c.blocked, c.block
         c.status, c.working_since, c.plan_path, c.request_id, c.live_at, c.section_id, s.name AS section,
         r.kind AS request_kind, r.requester AS request_requester,
         (SELECT COUNT(*) FROM notes n WHERE n.card_id = c.id) AS note_count,
+        EXISTS (SELECT 1 FROM sessions cs WHERE cs.card_id = c.id) AS has_chat,
         GREATEST(c.updated_at, COALESCE((SELECT MAX(n.created_at) FROM notes n WHERE n.card_id = c.id), c.updated_at),
             COALESCE((SELECT MAX(e.created_at) FROM events e WHERE e.card_id = c.id), c.updated_at)) AS last_activity,
         NOW() AS now_at
@@ -623,6 +624,51 @@ function claude_link(array $card, string $folder): ?string
     return 'claude://code/new?prompt=' . rawurlencode($prompt) . '&folder=' . rawurlencode($folder);
 }
 
+// Folders holding the desktop app's chat files (local_*.json); the tests point CLAUDE_SESSIONS_GLOB at fakes.
+function chat_sessions_dirs(): array
+{
+    $glob = defined('CLAUDE_SESSIONS_GLOB') ? CLAUDE_SESSIONS_GLOB
+        : getenv('LOCALAPPDATA') . '/Claude-Data/*/claude-code-sessions/*/*';
+    return glob($glob, GLOB_ONLYDIR) ?: [];
+}
+
+// The desktop app's chat for the card's newest linked session that isn't archived: ['id' => 'local_…', 'title' => …] or null.
+// A chat continued under a new CLI id keeps the old ones in priorCliSessionIds.
+function find_chat(PDO $db, int $card): ?array
+{
+    $st = $db->prepare('SELECT session_id FROM sessions WHERE card_id = ? ORDER BY seen_at DESC');
+    $st->execute([$card]);
+    $sessions = $st->fetchAll(PDO::FETCH_COLUMN);
+    $chats = []; // CLI session id => chat
+    foreach ($sessions ? chat_sessions_dirs() : [] as $dir) {
+        foreach (glob("$dir/local_*.json") ?: [] as $file) {
+            $raw = @file_get_contents($file);
+            // Skips decoding the many unrelated files (they hold large snapshots).
+            if ($raw === false || !array_filter($sessions, fn($s) => str_contains($raw, $s))) {
+                continue;
+            }
+            $j = json_decode($raw, true);
+            $id = $j['sessionId'] ?? null;
+            // The app opens only ids of this shape, and skips archived chats.
+            if (!is_array($j) || !empty($j['isArchived']) || !is_string($id) || !preg_match('/^local_[A-Za-z0-9-]{1,64}$/', $id)) {
+                continue;
+            }
+            $chat = ['id' => $id, 'title' => is_string($j['title'] ?? null) ? $j['title'] : ''];
+            foreach ([$j['cliSessionId'] ?? null, ...(array) ($j['priorCliSessionIds'] ?? [])] as $cli) {
+                if (is_string($cli)) {
+                    $chats[$cli] ??= $chat;
+                }
+            }
+        }
+    }
+    foreach ($sessions as $s) {
+        if (isset($chats[$s])) {
+            return $chats[$s];
+        }
+    }
+    return null;
+}
+
 // Windows notification through notify/toast.ps1, started in the background so the caller never waits.
 // Returns [command, environment]: the text goes in environment variables, so a leading "-" or non-ASCII survives.
 function notify_command(string $title, string $body): array
@@ -651,10 +697,10 @@ function card_from_prompt(string $prompt): ?int
     return preg_match('/\bcard #(\d{1,9})\b/i', $prompt, $m) ? (int) $m[1] : null;
 }
 
-// A command that runs "board.php <cmd> N ..." names card N.
+// Only "board.php status N ..." links the session to card N: other commands (move, note, section) often touch other cards.
 function card_from_command(string $command): ?int
 {
-    return preg_match('/board\.php["\']?\s+[a-z]+\s+["\']?(\d{1,9})\b/i', $command, $m) ? (int) $m[1] : null;
+    return preg_match('/board\.php["\']?\s+status\s+["\']?(\d{1,9})\b/i', $command, $m) ? (int) $m[1] : null;
 }
 
 // Links the session to the card and lights the card's dot; false if there is no such card.
@@ -728,7 +774,8 @@ function hook_event(PDO $db, array $in): void
 // Drops sessions unseen for a day; turns off dots with no active session seen in 30 min (crashed, closed or relinked).
 function hook_prune(PDO $db): void
 {
-    $db->exec('DELETE FROM sessions WHERE seen_at < NOW() - INTERVAL 24 HOUR');
+    // Kept for months: the card's Open chat button finds its chat through these rows.
+    $db->exec('DELETE FROM sessions WHERE seen_at < NOW() - INTERVAL 180 DAY');
     $db->exec('UPDATE cards c SET working_since = NULL, status = NULL, updated_at = updated_at
         WHERE working_since IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sessions s
             WHERE s.card_id = c.id AND s.active = 1 AND s.seen_at >= NOW() - INTERVAL 30 MINUTE)');

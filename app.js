@@ -442,11 +442,14 @@ function liveToggle(c, expanded) {
 
 function actionsEl(c) {
     const actions = el('div', 'card-actions');
-    for (const [act, icon, verb] of [['edit', '✎', 'Edit'], ['delete', '🗑', 'Delete']]) {
+    const acts = [['edit', '✎', `Edit card #${c.id}`], ['delete', '🗑', `Delete card #${c.id}`]];
+    if (c.has_chat) acts.unshift(['chat', '💬', `Open chat for card #${c.id}`]);
+    for (const [act, icon, label] of acts) {
         const b = el('button', 'card-act', icon);
         b.type = 'button';
         b.dataset.act = act;
-        b.setAttribute('aria-label', `${verb} card #${c.id}`);
+        b.setAttribute('aria-label', label);
+        if (act === 'chat') b.title = 'Open chat';
         actions.append(b);
     }
     return actions;
@@ -786,6 +789,7 @@ board.addEventListener('click', e => {
         openPanel(card.dataset.id, true);
     } else if (!act) openPanel(card.dataset.id);
     else if (act.dataset.act === 'edit') openPanel(card.dataset.id, true);
+    else if (act.dataset.act === 'chat') openChat(card.dataset.id);
     else deleteCard(card.dataset.id);
 });
 
@@ -934,6 +938,8 @@ const planLink = c => 'claude://code/new?prompt='
     + encodeURIComponent(`Update the plan for card #${c.id} (${c.project}): `)
     + '&folder=' + encodeURIComponent(c.folder);
 
+const chatBtn = document.getElementById('chat-btn');
+
 function openPanel(id, editTitle = false) {
     openId = String(id);
     openCard = null;
@@ -946,6 +952,7 @@ function openPanel(id, editTitle = false) {
     fillSections(editForm.elements.section, null);
     panel.querySelector('.panel-status').textContent = '';
     panel.querySelector('.working').hidden = true;
+    chatBtn.hidden = true;
     panel.querySelector('.notes').replaceChildren();
     panel.querySelector('.plan').replaceChildren();
     panel.hidden = overlay.hidden = false;
@@ -983,6 +990,7 @@ async function showCard(fill, select = false) {
         editForm.elements.project.value = c.project;
         fillSections(editForm.elements.section, c.project, filledSection = c.section ?? '');
         if (select && !panel.hidden) editForm.elements.title.select();
+        showChatBtn(c); // not on every poll: the lookup reads the app's chat files
     }
     panel.querySelector('.working').hidden = !isWorking(c);
     const status = [LABELS[c.col] || c.col];
@@ -1082,6 +1090,34 @@ noteForm.addEventListener('submit', async e => {
 
 document.getElementById('plan-btn').addEventListener('click', () => {
     if (openCard) openLink(planLink(openCard));
+});
+
+// Looks the chat up on each click, so a chat archived since the board loaded gives the toast, not the wrong place.
+async function openChat(id) {
+    try {
+        openLink((await api({ a: 'chat', id })).url);
+        toast('Opening chat…');
+    } catch (err) {
+        if (!err.offline) toastError(err);
+    }
+}
+
+// The panel's button names the chat; it stays hidden when the card has none.
+async function showChatBtn(c) {
+    let title = null;
+    try {
+        if (c.has_chat) title = (await api({ a: 'chat', id: c.id })).title;
+    } catch {
+        // 404: the chat was archived, deleted or not found, so there is nothing to open.
+    }
+    if (String(c.id) !== openId) return;
+    chatBtn.textContent = title ? `Open chat · ${title}` : 'Open chat';
+    chatBtn.title = chatBtn.textContent;
+    chatBtn.hidden = title === null;
+}
+
+chatBtn.addEventListener('click', () => {
+    if (openCard) openChat(openCard.id);
 });
 
 // Delete is held back for DELETE_MS behind an Undo toast; the request is only sent once that ends,

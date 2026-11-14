@@ -72,6 +72,38 @@ function entry(string $heading, string $card, string $verified = 'live page show
     return "## $heading\n- By: Claude, requested by the user\n- Code: abc → def\n$card- Verified: $verified\n\n";
 }
 
+// Fake desktop-app chat folders for find_chat; the real ones under LOCALAPPDATA are never touched.
+define('CHAT_TEST_DIR', sys_get_temp_dir() . '/kanban_chat_test');
+define('CLAUDE_SESSIONS_GLOB', CHAT_TEST_DIR . '/*/*');
+
+// Writes $files (name => array, or a raw string for a bad file) into one fake chat folder, runs $fn, then removes them.
+function with_chats(array $files, callable $fn): void
+{
+    $dir = CHAT_TEST_DIR . '/acct/proj';
+    @mkdir($dir, 0777, true);
+    foreach ($files as $name => $body) {
+        file_put_contents("$dir/$name", is_string($body) ? $body : json_encode($body));
+    }
+    try {
+        $fn();
+    } finally {
+        array_map('unlink', glob("$dir/*"));
+        rmdir($dir);
+        rmdir(dirname($dir));
+        rmdir(CHAT_TEST_DIR);
+    }
+}
+
+function chat(string $id, string $cli, array $more = []): array
+{
+    return array_merge(['sessionId' => "local_$id", 'cliSessionId' => $cli, 'title' => "Chat $id", 'isArchived' => false], $more);
+}
+
+function link_session(PDO $db, string $session, int $card, string $seen): void
+{
+    $db->prepare('INSERT INTO sessions (session_id, card_id, seen_at, active) VALUES (?, ?, ?, 0)')->execute([$session, $card, $seen]);
+}
+
 $tests = [
     'move_changes_column' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');
@@ -272,11 +304,51 @@ $tests = [
         ok(card_from_prompt('see CARD #7, thanks') === 7, 'case-insensitive');
         ok(card_from_prompt('cards #7 and #8') === null && card_from_prompt('discard #7') === null, 'not card #N');
         $php = 'C:\xampp\php\php.exe C:\xampp\htdocs\kanban\board.php';
-        ok(card_from_command("$php move 21 review") === 21, 'move');
         ok(card_from_command("$php status 4 \"Fixing\"") === 4, 'status');
-        ok(card_from_command("'$php' note '9' \"x\"") === 9, 'quoted');
+        ok(card_from_command("'$php' status '9' \"x\"") === 9, 'quoted');
+        // Only status links a chat: tagging or moving other cards must not (a section run linked this chat to #33).
+        ok(card_from_command("$php move 21 review") === null, 'move links');
+        ok(card_from_command("$php note 9 x") === null, 'note links');
+        ok(card_from_command("$php section 5 Loans") === null, 'section links');
         ok(card_from_command("$php add \"Fix 3 bugs\" Alpha") === null, 'add has no id');
         ok(card_from_command('git log -3') === null, 'not board.php');
+    },
+    'find_chat_matches_newest_unarchived' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        $other = add_card($db, 'B', 'Alpha', 'user');
+        ok(get_card($db, $id)['has_chat'] === 0, 'has_chat without sessions');
+        link_session($db, 'cli-old', $id, '2026-01-01 10:00:00');
+        link_session($db, 'cli-new', $id, '2026-01-01 11:00:00');
+        link_session($db, 'cli-b', $other, '2026-01-01 12:00:00');
+        ok(get_card($db, $id)['has_chat'] === 1, 'has_chat with sessions');
+        with_chats([
+            'local_old.json' => chat('old', 'cli-old'),
+            'local_new.json' => chat('new', 'cli-new'),
+            'local_b.json' => chat('b', 'cli-b'),
+        ], function () use ($db, $id) {
+            ok(find_chat($db, $id) === ['id' => 'local_new', 'title' => 'Chat new'], json_encode(find_chat($db, $id)));
+        });
+        with_chats([
+            'local_old.json' => chat('old', 'cli-old'),
+            'local_new.json' => chat('new', 'cli-new', ['isArchived' => true]),
+        ], function () use ($db, $id) {
+            ok(find_chat($db, $id)['id'] === 'local_old', 'archived chat used: ' . json_encode(find_chat($db, $id)));
+        });
+    },
+    'find_chat_prior_ids_bad_files_and_no_match' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        ok(find_chat($db, $id) === null, 'chat for a card with no sessions');
+        link_session($db, 'cli-1', $id, '2026-01-01 10:00:00');
+        with_chats([
+            'local_bad.json' => '{not json',
+            'local_evil.json' => chat('x"y', 'cli-1'), // id the app would refuse
+            'local_two.json' => chat('two', 'cli-2', ['priorCliSessionIds' => ['cli-0', 'cli-1']]),
+        ], function () use ($db, $id) {
+            ok(find_chat($db, $id) === ['id' => 'local_two', 'title' => 'Chat two'], json_encode(find_chat($db, $id)));
+        });
+        with_chats(['local_z.json' => chat('z', 'cli-9')], function () use ($db, $id) {
+            ok(find_chat($db, $id) === null, 'matched an unrelated chat');
+        });
     },
     'hook_link_lights_dot_and_stop_clears' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');
@@ -321,7 +393,7 @@ $tests = [
         hook_link($db, 'fresh', $b);
         hook_link($db, 'day_old', $b);
         $db->exec("UPDATE sessions SET seen_at = NOW() - INTERVAL 31 MINUTE WHERE session_id = 'old'");
-        $db->exec("UPDATE sessions SET seen_at = NOW() - INTERVAL 25 HOUR WHERE session_id = 'day_old'");
+        $db->exec("UPDATE sessions SET seen_at = NOW() - INTERVAL 181 DAY WHERE session_id = 'day_old'");
         hook_link($db, 'moved', $c);
         hook_link($db, 'moved', $b); // relinked: C is left with no session
         hook_prune($db);
@@ -329,7 +401,7 @@ $tests = [
         ok(card($db, $c)['working_since'] === null, 'orphan dot left on');
         ok(card($db, $b)['working_since'] !== null, 'live dot turned off');
         $left = $db->query('SELECT session_id FROM sessions ORDER BY session_id')->fetchAll(PDO::FETCH_COLUMN);
-        ok($left === ['fresh', 'moved', 'old'], implode(',', $left)); // kept a day so a follow-up turn relights
+        ok($left === ['fresh', 'moved', 'old'], implode(',', $left)); // kept 180 days: follow-up turns relight, Open chat finds the chat
     },
     'follow_up_turn_relights_dot' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');

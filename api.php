@@ -1,6 +1,6 @@
 <?php
 // JSON API for the web board.
-// GET: a=list[&project=Name] (first moves cards named in new verified DEPLOYMENTS.md entries to Live), a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown),
+// GET: a=list[&project=Name] (first moves cards named in new verified DEPLOYMENTS.md entries to Live), a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown), a=chat&id=N (url + title of the card's desktop-app chat; 404 if none),
 //      a=report_preview&project=P&from=YYYY-MM-DD&to=YYYY-MM-DD (counts of done, underway and no-section cards).
 // POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project), a=delete (id), a=note (id, body), a=section (id, section; blank clears),
 //       a=start_db (launches MySQL if it is not running; works without a database).
@@ -10,7 +10,7 @@
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
-const GET_ACTIONS = ['list', 'card', 'events', 'plan', 'requests', 'report_preview'];
+const GET_ACTIONS = ['list', 'card', 'events', 'plan', 'chat', 'requests', 'report_preview'];
 const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note', 'section', 'start_db', 'request_add', 'request_card', 'request_delete'];
 
 function out(array $data, int $code = 200): never
@@ -92,6 +92,12 @@ try {
                 out(['error' => 'No plan yet'], 404);
             }
             out(['markdown' => file_get_contents(check_plan_path($card['plan_path'], $card['folder']))]);
+        case 'chat':
+            $chat = find_chat($db, int_param('id'));
+            if ($chat === null) {
+                out(['error' => "This card's chat was archived or deleted."], 404);
+            }
+            out(['url' => 'claude://code/continue?session=' . $chat['id'], 'title' => $chat['title']]);
         case 'add':
             out(['id' => add_card($db, $_POST['title'] ?? '', $_POST['project'] ?? '', 'user', null, $_POST['section'] ?? null)]);
         case 'edit':

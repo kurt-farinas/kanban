@@ -369,6 +369,9 @@ textarea { resize: vertical; }
 
 .danger:hover { color: #fff; background: var(--danger); }
 
+.chat-btn { flex-shrink: 0; margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-btn[hidden] { display: none; }
+
 .panel-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 12px; }
 
 .note { padding: 8px 10px; margin-bottom: 6px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; }

@@ -91,6 +91,7 @@ header('Cache-Control: no-cache');
         </form>
         <p class="working" hidden><span class="dot"></span>Claude is working on this</p>
         <p class="panel-status"></p>
+        <button type="button" id="chat-btn" class="secondary chat-btn" data-needs-db hidden></button>
         <h3>Notes</h3>
         <ul class="notes"></ul>
         <form id="note" class="stack" novalidate>
