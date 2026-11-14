@@ -138,6 +138,15 @@ function error_of(callable $fn): string
 }
 
 $tests = [
+    'list_cards_carries_notes_text' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        $other = add_card($db, 'A', 'Alpha', 'user');
+        add_note($db, $id, 'First note', 'user');
+        add_note($db, $id, 'Second', 'claude');
+        $by = array_column(list_cards($db), null, 'id');
+        ok(str_contains($by[$id]['notes_text'], 'First note') && str_contains($by[$id]['notes_text'], 'Second'), 'notes_text is ' . $by[$id]['notes_text']);
+        ok($by[$other]['notes_text'] === '', 'card without notes has empty notes_text');
+    },
     'move_changes_column' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');
         move_card($db, $id, 'building', 'claude');

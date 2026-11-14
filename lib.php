@@ -69,6 +69,15 @@ function list_cards(PDO $db, ?string $project = null): array
         $st->execute([project_id($db, $project)]);
         $rows = $st->fetchAll();
     }
+    // shortcut: every note goes out with each poll; move search to the server if notes reach the thousands.
+    $notes = [];
+    foreach ($db->query('SELECT card_id, body FROM notes ORDER BY id')->fetchAll() as $n) {
+        $notes[$n['card_id']][] = $n['body'];
+    }
+    foreach ($rows as &$row) {
+        $row['notes_text'] = implode("\n", $notes[$row['id']] ?? []);
+    }
+    unset($row);
     return array_map('with_stuck_days', $rows);
 }
 

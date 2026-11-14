@@ -88,6 +88,17 @@ Restore a backup (this replaces the board's current data):
 C:\xampp\mysql\bin\mysql.exe -uroot kanban < "%USERPROFILE%\KanbanBackups\kanban-YYYY-MM-DD.sql"
 ```
 
+## Keyboard
+
+Shortcuts do nothing while you type in a box or a popup is open.
+
+- `/` search (searches titles, projects, sections, status and notes)
+- `n` new card
+- `j` / `k` next / previous card
+- `1`–`6` move the focused card to Todo … Live
+- `Enter` open the focused card
+- `?` show this list
+
 ## Safety
 
 The board only answers local requests (`Require local`, `localhost` host check, same-origin writes). The CLI, config, schema, tests and `.git` are not served over HTTP.

@@ -570,10 +570,10 @@ try {
 const searchWords = () => search.value.toLowerCase().split(/\s+/).filter(Boolean);
 
 // With quick filters on, a card must match one of them. Every search word must match: "21" or "#21" the id,
-// any other word (and "21") the title, project, section or status, ignoring case.
+// any other word (and "21") the title, project, section, status or notes, ignoring case.
 function cardMatches(c, words) {
     if (quickOn.size && ![...quickOn].some(k => QUICK[k](c))) return false;
-    const text = [c.title, c.project, c.section, c.status].filter(Boolean).join(' ').toLowerCase();
+    const text = [c.title, c.project, c.section, c.status, c.notes_text].filter(Boolean).join(' ').toLowerCase();
     return words.every(w => {
         const id = /^(#?)(\d+)$/.exec(w);
         if (id && String(c.id) === id[2]) return true;
@@ -620,13 +620,31 @@ search.addEventListener('keydown', e => {
     paint();
 });
 
-// "/" jumps to the search box unless you are typing somewhere or a popup is open.
+// Single-key shortcuts only fire when you are not typing somewhere and no popup is open.
+const keysFree = e => !(e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented
+    || e.target.closest?.('input, textarea, select, [contenteditable]') || confirmDone || reportDialog.open || projectsDialog.open || openId !== null || menu);
+
 document.addEventListener('keydown', e => {
-    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
-    if (e.target.closest?.('input, textarea, select, [contenteditable]') || confirmDone || reportDialog.open || projectsDialog.open || openId !== null || menu) return;
-    e.preventDefault();
-    search.focus();
-    search.select();
+    if (!keysFree(e)) return;
+    const cardNow = document.activeElement?.closest?.('.card');
+    if (e.key === '/') {
+        e.preventDefault();
+        search.focus();
+        search.select();
+    } else if (e.key === 'n') {
+        e.preventDefault();
+        document.getElementById('add-open').click();
+    } else if (e.key === 'j' || e.key === 'k') {
+        // paint() only renders cards that pass search and filters, so every .card in the DOM is visible.
+        const all = [...document.querySelectorAll('.card')];
+        const i = all.indexOf(cardNow);
+        all[i < 0 ? 0 : Math.max(0, Math.min(all.length - 1, i + (e.key === 'j' ? 1 : -1)))]?.focus();
+    } else if (/^[1-6]$/.test(e.key) && cardNow) {
+        const col = Object.keys(LABELS)[e.key - 1];
+        if (col && cardNow.closest('.column').dataset.col !== col) moveCard({ a: 'move', id: cardNow.dataset.id, col });
+    } else if (e.key === '?') {
+        toast('Keys: / search · n new card · j/k next/previous card · 1–6 move focused card · Enter open');
+    }
 });
 
 for (const b of quickButtons) {
