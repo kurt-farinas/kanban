@@ -25,6 +25,14 @@ let openCard = null;
 let blockedIds = null; // blocked card ids at the last poll; null = record silently
 let unseenBlocks = 0;
 const pendingDeletes = new Set(); // card ids deleted in the UI whose request waits behind an Undo toast
+let opening = 0; // Claude links waiting behind an Undo toast
+// Columns whose move opens a Claude session (lib.php claude_link), with the hint shown while dragging over them.
+const CLAUDE_HINTS = {
+    planning: 'Drop to plan with Claude',
+    building: 'Drop to start building with Claude',
+    review: 'Drop to review with Claude',
+    live: 'Drop to deploy with Claude',
+};
 
 async function api(params, post = false) {
     let res, data;
@@ -393,7 +401,7 @@ let updatePending = false;
 function userBusy() {
     const el = document.activeElement;
     const typing = el && el.matches('input, textarea, select') && el.value !== '' && el.id !== 'filter';
-    return dragging || typing || pendingDeletes.size > 0 || confirmDone;
+    return dragging || typing || pendingDeletes.size > 0 || opening > 0 || confirmDone;
 }
 
 function tryReload() {
@@ -419,7 +427,7 @@ async function load() {
     try {
         const data = await api({ a: 'list', project: filter.value });
         checkVersion(data.version);
-        if (my === seq && !dragging) render(data);
+        if (my === seq && !dragging && !confirmDone) render(data); // a drop waiting on the popup keeps its preview
     } catch (e) {
         showError(e);
     }
@@ -437,17 +445,87 @@ function dropPosition() {
 
 const board = document.querySelector('.board');
 
+function openQuestion(c, col) {
+    if (col === 'live') {
+        return {
+            title: `Deploy #${c.id} (${c.project}) to its live site?`,
+            body: "Claude follows that project's deploy rules: backup, log, then check the site.",
+            ok: 'Start deploy chat',
+            danger: true,
+        };
+    }
+    const verb = { planning: 'Plan', building: 'Start building', review: 'Review' }[col];
+    return {
+        title: `${verb} #${c.id} with Claude?`,
+        body: `"${c.title}" moves to ${LABELS[col]} and a new Claude chat opens in ${c.project}'s folder.`,
+        ok: 'Move and open Claude',
+    };
+}
+
+// Moves into a Claude column ask first; the move is saved at once and the link opens after OPEN_MS
+// unless Undo moves the card back (best effort: its old column and position).
+const OPEN_MS = 3000;
+
 async function moveCard(params) {
-    const from = cards.get(String(params.id))?.col;
+    const c = cards.get(String(params.id));
     const to = LABELS[params.col] || params.col;
+    const opens = !!c && c.col !== params.col && params.col in CLAUDE_HINTS;
+    if (opens && !(await confirmBox(openQuestion(c, params.col)))) {
+        load(); // put the card back
+        return;
+    }
     try {
         const res = await api(params, true);
-        toast(from === params.col ? `Reordered in ${to}` : `Moved to ${to}`);
-        if (res.link) openLink(res.link);
+        if (opens && res.link) openSoon(c, res.link);
+        else toast(c?.col === params.col ? `Reordered in ${to}` : `Moved to ${to}`);
     } catch (err) {
         toastError(err);
     }
     load();
+}
+
+function openSoon(c, link) {
+    opening++;
+    let close = null;
+    const timer = setTimeout(() => {
+        opening--;
+        close(); // the Undo goes before the link opens
+        openLink(link);
+    }, OPEN_MS);
+    close = toast(`Opening Claude for #${c.id}…`, {
+        ms: OPEN_MS,
+        action: {
+            label: 'Undo',
+            run: async () => {
+                clearTimeout(timer);
+                opening--;
+                try {
+                    await api({ a: 'move', id: c.id, col: c.col, position: c.position }, true);
+                    toast(`Moved back to ${LABELS[c.col] || c.col}`);
+                } catch (err) {
+                    toastError(err);
+                }
+                load();
+            },
+        },
+    });
+}
+
+// One hint element, moved into whichever Claude column the drag is over.
+const dropHint = el('p', 'drop-hint');
+
+function showHint(section) {
+    const text = section && CLAUDE_HINTS[section.dataset.col];
+    if (!text) {
+        dropHint.remove();
+        document.querySelector('.column.drop-claude')?.classList.remove('drop-claude');
+        return;
+    }
+    if (dropHint.parentNode === section) return;
+    showHint(null);
+    dropHint.textContent = text;
+    section.querySelector('h2').after(dropHint);
+    section.classList.add('drop-claude');
 }
 
 board.addEventListener('mousedown', () => { dragged = false; });
@@ -464,6 +542,7 @@ board.addEventListener('dragstart', e => {
 });
 
 board.addEventListener('dragend', () => {
+    showHint(null);
     if (!dragging) return;
     dragging.classList.remove('dragging');
     dragging = null;
@@ -529,7 +608,9 @@ function openMenu(card, x, y) {
     item('Edit title', () => openPanel(id, true));
     menu.append(el('div', 'ctx-label', 'Move to ▸'));
     for (const col of Object.keys(LABELS)) {
-        if (col !== cards.get(id)?.col) item(LABELS[col], () => moveCard({ a: 'move', id, col }), 'ctx-item ctx-sub');
+        if (col !== cards.get(id)?.col) {
+            item(LABELS[col] + (col in CLAUDE_HINTS ? '…' : ''), () => moveCard({ a: 'move', id, col }), 'ctx-item ctx-sub');
+        }
     }
     menu.append(el('hr', 'ctx-sep'));
     item('Delete…', () => deleteCard(id), 'ctx-item ctx-danger');
@@ -569,13 +650,18 @@ for (const section of document.querySelectorAll('.column')) {
     section.addEventListener('dragover', e => {
         if (!dragging) return;
         e.preventDefault();
+        showHint(section);
         const before = [...list.children].find(c => c !== dragging
             && e.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
         list.insertBefore(dragging, before || null);
     });
+    section.addEventListener('dragleave', e => {
+        if (!section.contains(e.relatedTarget)) showHint(null);
+    });
     section.addEventListener('drop', async e => {
         if (!dragging) return;
         e.preventDefault();
+        showHint(null);
         dropped = true;
         const params = { a: 'move', id: dragging.dataset.id, col: section.dataset.col };
         const pos = dropPosition();

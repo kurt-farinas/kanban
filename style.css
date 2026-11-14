@@ -143,6 +143,19 @@ select:focus, input:focus, textarea:focus, button:focus-visible, .card:focus-vis
 
 .cards { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
 
+/* Shown while a card is dragged over a column whose move opens Claude. */
+.column.drop-claude { border-color: var(--accent); }
+
+.drop-hint {
+    margin: 0;
+    padding: 6px 8px;
+    font-size: 12px;
+    text-align: center;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 8px;
+}
+
 .card {
     padding: 10px 12px;
     background: var(--card);
