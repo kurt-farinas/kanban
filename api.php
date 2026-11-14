@@ -1,12 +1,14 @@
 <?php
 // JSON API for the web board.
 // GET: a=list[&project=Name], a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown).
-// POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project), a=delete (id), a=note (id, body).
+// POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project), a=delete (id), a=note (id, body),
+//       a=start_db (launches MySQL if it is not running; works without a database).
+// A database that can't be reached answers 503 with db_down: true.
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
 const GET_ACTIONS = ['list', 'card', 'events', 'plan'];
-const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note'];
+const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note', 'start_db'];
 
 function out(array $data, int $code = 200): never
 {
@@ -47,10 +49,20 @@ if ($post !== in_array($a, POST_ACTIONS, true)) {
 }
 
 try {
+    if ($a === 'start_db') {
+        // Same hidden launch as autostart/start-xampp.vbs; a second click while it runs does nothing.
+        exec('tasklist /FI "IMAGENAME eq mysqld.exe" /NH', $lines);
+        if (stripos(implode("\n", $lines), 'mysqld.exe') !== false) {
+            out(['started' => false]);
+        }
+        chdir('C:\xampp');
+        pclose(popen('start "" /B "C:\xampp\mysql\bin\mysqld.exe" --defaults-file="C:\xampp\mysql\bin\my.ini" --standalone >NUL 2>&1', 'r'));
+        out(['started' => true]);
+    }
     try {
         $db = db();
     } catch (PDOException $e) {
-        out(['error' => "Can't reach the database. Is MySQL running in XAMPP?"], 503);
+        out(['error' => "Can't reach the database. Is MySQL running in XAMPP?", 'db_down' => true], 503);
     }
     switch ($a) {
         case 'list':

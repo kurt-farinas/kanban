@@ -21,6 +21,7 @@ header('Cache-Control: no-cache');
 </head>
 <body>
     <div id="error" class="banner" role="alert" hidden></div>
+    <div id="offline" class="banner" role="alert" hidden><span class="offline-text"></span> <button type="button" id="start-db" class="banner-btn" hidden>Start database</button></div>
     <div id="update" class="banner banner-update" role="status" hidden>Board updated, reloading when you're done</div>
     <header class="topbar">
         <h1>Kanban</h1>
@@ -40,12 +41,12 @@ header('Cache-Control: no-cache');
                 <h2><?= $label ?> <span class="count">0</span></h2>
                 <div class="cards"></div>
                 <?php if ($col === 'todo'): ?>
-                    <button type="button" id="add-open" class="add-open">+ Add card</button>
+                    <button type="button" id="add-open" class="add-open" data-needs-db>+ Add card</button>
                     <form id="add" class="add" hidden novalidate>
                         <input name="title" maxlength="200" placeholder="Card title" aria-label="Card title">
                         <p class="field-error" hidden>Enter a title.</p>
                         <select name="project" aria-label="Project"></select>
-                        <button type="submit">Add</button>
+                        <button type="submit" data-needs-db>Add</button>
                     </form>
                 <?php endif ?>
             </section>
@@ -62,7 +63,7 @@ header('Cache-Control: no-cache');
             <p class="field-error" hidden>Enter a title.</p>
             <div class="row">
                 <select name="project" aria-label="Project"></select>
-                <button type="submit" class="primary">Save</button>
+                <button type="submit" class="primary" data-needs-db>Save</button>
             </div>
         </form>
         <p class="working" hidden><span class="dot"></span>Claude is working on this</p>
@@ -72,13 +73,13 @@ header('Cache-Control: no-cache');
         <form id="note" class="stack" novalidate>
             <textarea name="body" maxlength="2000" rows="3" placeholder="Write a note" aria-label="Note"></textarea>
             <p class="field-error" hidden>Write a note first.</p>
-            <button type="submit" class="primary">Add note</button>
+            <button type="submit" class="primary" data-needs-db>Add note</button>
         </form>
         <h3>Plan</h3>
         <div class="plan md"></div>
         <div class="panel-actions">
-            <button type="button" id="plan-btn" class="secondary">Change plan with Claude</button>
-            <button type="button" id="delete" class="danger">Delete card</button>
+            <button type="button" id="plan-btn" class="secondary" data-needs-db>Change plan with Claude</button>
+            <button type="button" id="delete" class="danger" data-needs-db>Delete card</button>
         </div>
     </aside>
     <div id="confirm" class="confirm-wrap" hidden>

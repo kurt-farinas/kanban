@@ -38,21 +38,85 @@ const CLAUDE_HINTS = {
 };
 
 async function api(params, post = false) {
+    const n = ++apiSeq;
     let res, data;
     try {
         res = await fetch(post ? 'api.php' : 'api.php?' + new URLSearchParams(params),
             post ? { method: 'POST', body: new URLSearchParams(params) } : {});
         data = await res.json();
     } catch {
-        throw new Error(res ? `Server error (${res.status}).` : "Can't reach the server.");
+        // No response at all = Apache is down.
+        throw goOffline(new Error(res ? `Server error (${res.status}).` : "Can't reach the server."), !res || res.status === 503, false, n);
     }
-    if (!res.ok) throw new Error(data.error || `Server error (${res.status}).`);
+    if (!res.ok) throw goOffline(new Error(data.error || `Server error (${res.status}).`), res.status === 503, data.db_down, n);
     banner.hidden = true;
+    if (params.a !== 'start_db') { // start_db answers without the database
+        okSeq = Math.max(okSeq, n);
+        goOnline();
+    }
     return data;
 }
 
-// Background (poll) failures use the banner; the user's own actions report through toast().
+// --- Offline mode: banner with a countdown, a retry of a=list every RETRY_S, editing paused ---
+
+const offlineBar = document.getElementById('offline');
+const startDb = document.getElementById('start-db');
+const RETRY_S = 5;
+let offline = false;
+let offlineRun = 0; // a new offline spell gets a new countdown; an old one stops
+let apiSeq = 0;
+let okSeq = 0; // newest request that reached the database
+
+// Marks the error as an outage (so the red banner skips it) and enters offline mode; returns the error.
+function goOffline(err, down, dbDown, n) {
+    if (!down) return err;
+    err.offline = true;
+    if (n < okSeq) return err; // sent before a newer request got through (e.g. a slow connect timeout): stale
+    startDb.hidden = !dbDown; // the button only helps when Apache answered and MySQL did not
+    if (offline) return err;
+    offline = true;
+    document.body.classList.add('offline');
+    for (const b of document.querySelectorAll('[data-needs-db]')) b.disabled = true;
+    closeMenu();
+    banner.hidden = true;
+    offlineBar.hidden = false;
+    countdown(++offlineRun, RETRY_S);
+    return err;
+}
+
+function countdown(run, left) {
+    if (!offline || run !== offlineRun) return;
+    const text = offlineBar.querySelector('.offline-text');
+    if (left > 0) {
+        text.textContent = `Can't reach the database. Retrying in ${left} s…`;
+        setTimeout(countdown, 1000, run, left - 1);
+    } else {
+        text.textContent = "Can't reach the database. Retrying…";
+        load().then(() => countdown(run, RETRY_S)); // load() never rejects
+    }
+}
+
+function goOnline() {
+    if (!offline) return;
+    offline = false;
+    document.body.classList.remove('offline');
+    for (const b of document.querySelectorAll('[data-needs-db]')) b.disabled = false;
+    offlineBar.hidden = true;
+    toast('Back online');
+}
+
+startDb.addEventListener('click', async () => {
+    try {
+        const { started } = await busy(startDb, api({ a: 'start_db' }, true), 'Starting…');
+        toast(started ? 'Starting the database…' : 'The database is already starting');
+    } catch (err) {
+        if (!err.offline) toastError(err);
+    }
+});
+
+// Background (poll) failures use the banner, outages the offline banner; the user's own actions report through toast().
 function showError(e) {
+    if (e.offline) return;
     banner.textContent = e.message;
     banner.hidden = false;
 }
@@ -156,14 +220,14 @@ document.addEventListener('keydown', e => {
 }, true);
 
 // Disables the button and shows "Saving…" while the request runs; returns the request's result.
-async function busy(button, promise) {
+async function busy(button, promise, text = 'Saving…') {
     const label = button.textContent;
     button.disabled = true;
-    button.textContent = 'Saving…';
+    button.textContent = text;
     try {
         return await promise;
     } finally {
-        button.disabled = false;
+        button.disabled = offline && 'needsDb' in button.dataset; // offline mode wins
         button.textContent = label;
     }
 }
@@ -360,11 +424,18 @@ function render(data) {
     noticeWorking(data.cards);
 }
 
-// "Claude started" toast when a card's working dot appears since the last render.
+// "Claude started" toast when a card's working dot appears since the last render. The hook clears the dot
+// at the end of every turn, so a card seen working in the last STARTED_QUIET_MS is a follow-up turn: no toast.
+const STARTED_QUIET_MS = 5 * 60 * 1000;
+const workingSeen = new Map(); // card id -> last render time it had the dot
+
 function noticeWorking(list) {
     const now = new Set(list.filter(isWorking).map(c => c.id));
+    const t = Date.now();
     for (const c of list) {
-        if (workingIds && now.has(c.id) && !workingIds.has(c.id)) {
+        const recent = t - (workingSeen.get(c.id) ?? 0) < STARTED_QUIET_MS;
+        if (now.has(c.id)) workingSeen.set(c.id, t);
+        if (workingIds && now.has(c.id) && !workingIds.has(c.id) && !recent) {
             toast(`Claude started on #${c.id}${c.status ? `: ${c.status}` : ''}`, { kind: 'claude' });
         }
     }
@@ -553,6 +624,7 @@ board.addEventListener('mousedown', () => { dragged = false; });
 board.addEventListener('dragstart', e => {
     const card = e.target.closest('.card');
     if (!card) return;
+    if (offline) { e.preventDefault(); return; }
     dragging = card;
     dropped = false;
     dragged = true;
@@ -594,7 +666,7 @@ board.addEventListener('dblclick', e => {
 
 board.addEventListener('contextmenu', e => {
     const card = e.target.closest('.card');
-    if (!card) return;
+    if (!card || offline) return;
     e.preventDefault();
     openMenu(card, e.clientX, e.clientY);
 });
@@ -762,7 +834,7 @@ async function showCard(fill, select = false) {
     try {
         data = await api({ a: 'card', id });
     } catch (e) {
-        if (id === openId) {
+        if (id === openId && !e.offline) { // offline: the panel stays, read-only
             closePanel();
             showError(e);
         }
@@ -983,6 +1055,7 @@ function refresh() {
 load();
 pollClaude();
 setInterval(() => {
+    if (offline) return; // the offline countdown does the retrying
     pollClaude();
     if (dragging) return;
     refresh();
