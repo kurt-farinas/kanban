@@ -24,6 +24,7 @@ let openId = null; // card shown in the details panel
 let openCard = null;
 let blockedIds = null; // blocked card ids at the last poll; null = record silently
 let unseenBlocks = 0;
+const pendingDeletes = new Set(); // card ids deleted in the UI whose request waits behind an Undo toast
 
 async function api(params, post = false) {
     let res, data;
@@ -39,6 +40,7 @@ async function api(params, post = false) {
     return data;
 }
 
+// Background (poll) failures use the banner; the user's own actions report through toast().
 function showError(e) {
     banner.textContent = e.message;
     banner.hidden = false;
@@ -49,6 +51,105 @@ function el(tag, className, text) {
     e.className = className;
     if (text !== undefined) e.textContent = text;
     return e;
+}
+
+// All claude:// navigation goes through here.
+function openLink(url) {
+    window.location.href = url;
+}
+
+// --- Toasts, confirm popup, saving state ---
+
+const toastBox = document.getElementById('toasts');
+const TOAST_MAX = 3;
+
+// kind: 'user' (gray), 'claude' (clay), 'error' (red, stays until closed unless ms is given).
+// action: {label, run} adds a button that closes the toast and runs. Returns a function that closes it.
+function toast(text, { kind = 'user', action, ms } = {}) {
+    const t = el('div', `toast toast-${kind}`);
+    t.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    t.append(el('span', 'toast-text', text));
+    let timer = null;
+    const close = () => {
+        clearTimeout(timer);
+        t.remove();
+    };
+    if (action) {
+        const b = el('button', 'toast-action', action.label);
+        b.type = 'button';
+        b.addEventListener('click', () => { close(); action.run(); });
+        t.append(b);
+    }
+    const x = el('button', 'close', '✕');
+    x.type = 'button';
+    x.setAttribute('aria-label', 'Dismiss');
+    x.addEventListener('click', close);
+    t.append(x);
+    toastBox.append(t);
+    // Over the limit the oldest goes early, errors last.
+    while (toastBox.children.length > TOAST_MAX) {
+        (toastBox.querySelector('.toast:not(.toast-error)') || toastBox.firstElementChild).remove();
+    }
+    ms ??= kind === 'error' ? null : 4000;
+    if (ms !== null) timer = setTimeout(close, ms);
+    return close;
+}
+
+const toastError = err => toast(err.message, { kind: 'error' });
+
+const confirmWrap = document.getElementById('confirm');
+const [confirmCancel, confirmOk] = confirmWrap.querySelectorAll('button');
+let confirmDone = null; // resolves the open popup
+
+// Styled replacement for the native confirm dialog. Esc / backdrop = cancel; Enter acts on the focused button.
+// A second call while one is open resolves false at once.
+function confirmBox({ title, body = '', ok = 'OK', danger = false }) {
+    if (confirmDone) return Promise.resolve(false);
+    document.getElementById('confirm-title').textContent = title;
+    document.getElementById('confirm-body').textContent = body;
+    confirmOk.textContent = ok;
+    confirmOk.className = danger ? 'danger' : 'primary';
+    const back = document.activeElement;
+    confirmWrap.hidden = false;
+    (danger ? confirmCancel : confirmOk).focus();
+    return new Promise(resolve => {
+        confirmDone = value => {
+            confirmDone = null;
+            confirmWrap.hidden = true;
+            if (back && back.isConnected) back.focus();
+            resolve(value);
+        };
+    });
+}
+
+confirmWrap.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (b) confirmDone?.(b.dataset.ok === '1');
+    else if (e.target === confirmWrap) confirmDone?.(false);
+});
+
+document.addEventListener('keydown', e => {
+    if (!confirmDone) return;
+    if (e.key === 'Escape') {
+        e.stopImmediatePropagation(); // closes the popup only, not the panel behind it
+        confirmDone(false);
+    } else if (e.key === 'Tab') {
+        e.preventDefault(); // keep focus inside the popup
+        (document.activeElement === confirmOk ? confirmCancel : confirmOk).focus();
+    }
+}, true);
+
+// Disables the button and shows "Saving…" while the request runs; returns the request's result.
+async function busy(button, promise) {
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Saving…';
+    try {
+        return await promise;
+    } finally {
+        button.disabled = false;
+        button.textContent = label;
+    }
 }
 
 // MySQL "YYYY-MM-DD HH:MM:SS" in server local time; the browser runs on the same PC.
@@ -233,8 +334,9 @@ function cardEl(c) {
 function render(data) {
     fillProjects(data.projects);
     cards = new Map(data.cards.map(c => [String(c.id), c]));
+    const shown = data.cards.filter(c => !pendingDeletes.has(String(c.id)));
     for (const section of document.querySelectorAll('.column')) {
-        const mine = data.cards.filter(c => c.col === section.dataset.col);
+        const mine = shown.filter(c => c.col === section.dataset.col);
         section.querySelector('.cards').replaceChildren(...mine.map(cardEl));
         section.querySelector('.count').textContent = mine.length;
     }
@@ -288,15 +390,15 @@ const pageVersion = document.querySelector('meta[name="board-version"]')?.conten
 let seenVersion = null;
 let updatePending = false;
 
-function busy() {
+function userBusy() {
     const el = document.activeElement;
     const typing = el && el.matches('input, textarea, select') && el.value !== '' && el.id !== 'filter';
-    return dragging || typing;
+    return dragging || typing || pendingDeletes.size > 0 || confirmDone;
 }
 
 function tryReload() {
     if (!updatePending) return;
-    if (busy()) document.getElementById('update').hidden = false;
+    if (userBusy()) document.getElementById('update').hidden = false;
     else location.reload();
 }
 
@@ -336,11 +438,14 @@ function dropPosition() {
 const board = document.querySelector('.board');
 
 async function moveCard(params) {
+    const from = cards.get(String(params.id))?.col;
+    const to = LABELS[params.col] || params.col;
     try {
         const res = await api(params, true);
-        if (res.link) window.location.href = res.link;
+        toast(from === params.col ? `Reordered in ${to}` : `Moved to ${to}`);
+        if (res.link) openLink(res.link);
     } catch (err) {
-        showError(err);
+        toastError(err);
     }
     load();
 }
@@ -496,14 +601,17 @@ addForm.addEventListener('submit', async e => {
     e.preventDefault();
     if (titleInput.value.trim() === '') {
         titleError.hidden = false;
+        toast(titleError.textContent, { kind: 'error' });
         return;
     }
     try {
-        await api({ a: 'add', title: titleInput.value, project: projectSelect.value }, true);
+        await busy(addForm.querySelector('button[type=submit]'),
+            api({ a: 'add', title: titleInput.value, project: projectSelect.value }, true));
         titleInput.value = '';
+        toast('Card added');
         load();
     } catch (err) {
-        showError(err);
+        toastError(err);
     }
 });
 
@@ -606,16 +714,20 @@ editForm.elements.title.addEventListener('input', () => { editForm.querySelector
 editForm.addEventListener('submit', async e => {
     e.preventDefault();
     const title = editForm.elements.title.value;
+    const error = editForm.querySelector('.field-error');
     if (title.trim() === '') {
-        editForm.querySelector('.field-error').hidden = false;
+        error.hidden = false;
+        toast(error.textContent, { kind: 'error' });
         return;
     }
     try {
-        await api({ a: 'edit', id: openId, title, project: editForm.elements.project.value }, true);
+        await busy(editForm.querySelector('button[type=submit]'),
+            api({ a: 'edit', id: openId, title, project: editForm.elements.project.value }, true));
+        toast('Card saved');
         showCard(true);
         refresh();
     } catch (err) {
-        showError(err);
+        toastError(err);
     }
 });
 
@@ -624,33 +736,58 @@ noteForm.elements.body.addEventListener('input', () => { noteForm.querySelector(
 noteForm.addEventListener('submit', async e => {
     e.preventDefault();
     const body = noteForm.elements.body.value;
+    const error = noteForm.querySelector('.field-error');
     if (body.trim() === '') {
-        noteForm.querySelector('.field-error').hidden = false;
+        error.hidden = false;
+        toast(error.textContent, { kind: 'error' });
         return;
     }
     try {
-        await api({ a: 'note', id: openId, body }, true);
+        await busy(noteForm.querySelector('button[type=submit]'), api({ a: 'note', id: openId, body }, true));
         noteForm.elements.body.value = '';
+        toast('Note added');
         showCard(false);
         refresh();
     } catch (err) {
-        showError(err);
+        toastError(err);
     }
 });
 
 document.getElementById('plan-btn').addEventListener('click', () => {
-    if (openCard) window.location.href = planLink(openCard);
+    if (openCard) openLink(planLink(openCard));
 });
 
+// Delete is held back for DELETE_MS behind an Undo toast; the request is only sent once that ends,
+// so Undo (or closing the window) keeps the card.
+const DELETE_MS = 5000;
+
 async function deleteCard(id) {
-    if (!confirm(`Delete card #${id}? This can't be undone.`)) return;
-    try {
-        await api({ a: 'delete', id }, true);
-        if (openId === String(id)) closePanel();
+    id = String(id);
+    const c = cards.get(id);
+    const ok = await confirmBox({
+        title: `Delete card #${id}?`,
+        body: c ? `"${c.title}" and its notes will be removed.` : 'The card and its notes will be removed.',
+        ok: 'Delete',
+        danger: true,
+    });
+    if (!ok || pendingDeletes.has(id)) return;
+    pendingDeletes.add(id);
+    if (openId === id) closePanel();
+    board.querySelector(`.card[data-id="${CSS.escape(id)}"]`)?.remove();
+    load(); // re-render so counts and empty hints match
+    const timer = setTimeout(async () => {
+        try {
+            await api({ a: 'delete', id }, true);
+        } catch (err) {
+            toastError(err);
+        }
+        pendingDeletes.delete(id);
         refresh();
-    } catch (err) {
-        showError(err);
-    }
+    }, DELETE_MS);
+    toast('Card deleted', {
+        ms: DELETE_MS,
+        action: { label: 'Undo', run: () => { clearTimeout(timer); pendingDeletes.delete(id); load(); } },
+    });
 }
 
 document.getElementById('delete').addEventListener('click', () => deleteCard(openId));

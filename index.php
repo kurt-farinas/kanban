@@ -81,6 +81,17 @@ header('Cache-Control: no-cache');
             <button type="button" id="delete" class="danger">Delete card</button>
         </div>
     </aside>
+    <div id="confirm" class="confirm-wrap" hidden>
+        <div class="confirm" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+            <h2 id="confirm-title"></h2>
+            <p id="confirm-body"></p>
+            <div class="confirm-actions">
+                <button type="button" class="secondary" data-ok="0">Cancel</button>
+                <button type="button" data-ok="1">OK</button>
+            </div>
+        </div>
+    </div>
+    <div id="toasts" class="toasts"></div>
     <script src="<?= $v('app.js') ?>"></script>
     <script>
         (function () {
