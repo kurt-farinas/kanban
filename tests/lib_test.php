@@ -957,6 +957,11 @@ $tests = [
             throws(fn() => add_card($db, 'New work', 'Alpha', 'user'), 'card on archived project');
             ok(in_array($card, array_column(list_cards($db), 'id')), 'existing card kept');
             ok(project_row($db, 'Alpha')['archived'] === true, 'archived flag');
+            throws(fn() => add_request($db, 'Ask', 'Ana', 'Alpha', 'do', 'user'), 'request on archived project');
+            $beta = add_card($db, 'Beta work', 'Beta', 'user');
+            throws(fn() => edit_card($db, $beta, 'Beta work', 'Alpha', 'user'), 'card moved into archived project');
+            edit_card($db, $card, 'Old work, renamed', 'Alpha', 'user');
+            ok(get_card($db, $card)['title'] === 'Old work, renamed', 'card already in archived project can be edited');
             throws(fn() => set_project_archived($db, 9999, true, 'user'), 'unknown project');
         } finally {
             set_project_archived($db, $alpha, false, 'user');

@@ -127,14 +127,22 @@ function get_card(PDO $db, int $id): array
     return $st->fetch() ?: throw new InvalidArgumentException("No card #$id.");
 }
 
+// New cards and requests, and cards moved in from another project, may not land in an archived project.
+function check_not_archived(PDO $db, int $pid, string $project): void
+{
+    $st = $db->prepare('SELECT archived FROM projects WHERE id = ?');
+    $st->execute([$pid]);
+    if ($st->fetchColumn()) {
+        throw new InvalidArgumentException("Project '$project' is archived. Un-archive it in Projects first.");
+    }
+}
+
 function add_card(PDO $db, string $title, string $project, string $by, ?int $requestId = null, ?string $section = null): int
 {
     check_by($by);
     check_title($title);
     $pid = project_id($db, $project);
-    if ($db->query("SELECT archived FROM projects WHERE id = $pid")->fetchColumn()) {
-        throw new InvalidArgumentException("Project '$project' is archived. Un-archive it in Projects first.");
-    }
+    check_not_archived($db, $pid, $project);
     $sid = section_id($db, $pid, $project, $section)['id'];
     return in_tx($db, function () use ($db, $pid, $title, $by, $project, $requestId, $sid) {
         $st = $db->prepare("INSERT INTO cards (project_id, title, col, position, updated_by, request_id, section_id)
@@ -158,6 +166,9 @@ function edit_card(PDO $db, int $id, string $title, string $project, string $by,
     $pid = project_id($db, $project);
     in_tx($db, function () use ($db, $id, $pid, $title, $by, $project, $wasTitle, $wasProject) {
         card_col($db, $id, true);
+        if ((int) $db->query('SELECT project_id FROM cards WHERE id = ' . (int) $id)->fetchColumn() !== $pid) {
+            check_not_archived($db, $pid, $project); // a card already in an archived project can still be edited
+        }
         $st = $db->prepare('SELECT c.title, p.name FROM cards c JOIN projects p ON p.id = c.project_id WHERE c.id = ? FOR UPDATE');
         $st->execute([$id]);
         [$curTitle, $curProject] = $st->fetch(PDO::FETCH_NUM);
@@ -652,6 +663,7 @@ function add_request(PDO $db, string $body, string $requester, string $project, 
         throw new InvalidArgumentException("Unknown kind '$kind' (use do, change or remove).");
     }
     $pid = project_id($db, $project);
+    check_not_archived($db, $pid, $project);
     $requester = trim($requester);
     return in_tx($db, function () use ($db, $body, $requester, $pid, $kind, $by, $project) {
         $db->prepare('INSERT INTO requests (body, requester, project_id, kind) VALUES (?, ?, ?, ?)')

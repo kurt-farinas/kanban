@@ -391,6 +391,9 @@ function fillProjects(projects) {
         const list = select === projectSelect || select === requestForm.elements.project ? open : names;
         select.replaceChildren(...(select === filter ? [new Option('All projects', '')] : []), ...list.map(n => new Option(n, n)));
         select.value = was;
+        // The chosen project was archived while the form was open: keep it shown, so a save fails loudly
+        // instead of quietly landing in another project.
+        if (select.selectedIndex < 0 && was && list !== names) select.append(new Option(`${was} (archived)`, was, true, true));
         if (select.selectedIndex < 0) select.selectedIndex = 0;
     }
     filledNames = names;
@@ -603,8 +606,10 @@ function showOlderButton(n) {
     b.type = 'button';
     b.title = 'Live for more than 30 days';
     b.addEventListener('click', () => {
+        const shownBefore = document.querySelectorAll('.column[data-col="live"] .card').length;
         showOlderLive = true;
         paint();
+        document.querySelectorAll('.column[data-col="live"] .card')[shownBefore]?.focus(); // the button is gone
     });
     return b;
 }
@@ -1147,6 +1152,8 @@ filter.addEventListener('change', () => {
 addOpen.addEventListener('click', () => {
     addForm.hidden = false;
     addOpen.hidden = true;
+    for (const o of [...projectSelect.options]) if (o.text.endsWith(' (archived)')) o.remove(); // only for a form open at archive time
+    if (projectSelect.selectedIndex < 0) projectSelect.selectedIndex = 0;
     fillSections(addForm.elements.section, projectSelect.value);
     titleInput.focus();
 });
