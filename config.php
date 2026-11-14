@@ -1,12 +1,20 @@
 <?php
-// Optional config.local.php returns an array overriding any of: host, user, pass, db.
+// Optional config.local.php (git-ignored) returns an array overriding any of: host, user, pass, db, timezone.
 function db_config(): array
 {
-    $c = ['host' => '127.0.0.1', 'user' => 'root', 'pass' => '', 'db' => 'kanban'];
-    if (is_file(__DIR__ . '/config.local.php')) {
-        $c = array_merge($c, require __DIR__ . '/config.local.php');
+    static $c = null;
+    if ($c === null) {
+        $c = ['host' => '127.0.0.1', 'user' => 'root', 'pass' => '', 'db' => 'kanban', 'timezone' => null];
+        if (is_file(__DIR__ . '/config.local.php')) {
+            $c = array_merge($c, require __DIR__ . '/config.local.php');
+        }
     }
     return $c;
+}
+
+// PHP's clock should match the PC and the database (XAMPP's php.ini default is Europe/Berlin).
+if (db_config()['timezone']) {
+    date_default_timezone_set(db_config()['timezone']);
 }
 
 function db(?string $name = null): PDO
