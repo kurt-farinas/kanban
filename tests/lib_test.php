@@ -222,10 +222,19 @@ $tests = [
     },
     'link_prompts_and_cap' => function (PDO $db) {
         $card = ['id' => 3, 'title' => 'T', 'project' => 'Beta'];
-        $p = fn($col, $title = 'T') => prompt_of(claude_link(['col' => $col, 'title' => $title] + $card, 'f'));
-        ok($p('building') === 'Build the plan for card #3 (Beta): T', $p('building'));
-        ok($p('review') === 'Review the code for card #3 (Beta): T', $p('review'));
-        ok($p('live') === 'Deploy card #3 (Beta): T', $p('live'));
+        $p = fn($col, $title = 'T', $plan = null) => prompt_of(claude_link(['col' => $col, 'title' => $title, 'plan_path' => $plan] + $card, 'f'));
+        $plan = 'C:\p\plan.md';
+        ok($p('planning') === 'Plan card #3 (Beta): T. Use the feature-planner skill.', $p('planning'));
+        ok($p('building') === "Build card #3 (Beta): T. There is no plan file yet, so read the card's notes first.", $p('building'));
+        ok($p('building', 'T', $plan) === 'Build card #3 (Beta): T. Follow the plan in C:\p\plan.md.', $p('building', 'T', $plan));
+        ok($p('review') === "Review card #3 (Beta): T. Check the changes against the card's notes.", $p('review'));
+        ok($p('review', 'T', $plan) === 'Review card #3 (Beta): T. Check the changes against the plan in C:\p\plan.md.', $p('review', 'T', $plan));
+        ok($p('live') === "Deploy card #3 (Beta): T. Follow the project's deploy rules and log it in DEPLOYMENTS.md with Card: #3.", $p('live'));
+        ok($p('planning', 'Fix it.') === 'Plan card #3 (Beta): Fix it. Use the feature-planner skill.', 'double full stop');
+        foreach (['planning', 'building', 'review', 'live'] as $col) {
+            ok(!str_starts_with($p($col), '/'), "$col starts with a slash: the app turns it into a full-width one");
+            ok(card_from_prompt($p($col)) === 3, "$col prompt doesn't link the chat");
+        }
         ok(mb_strlen($p('live', str_repeat('é', 5000))) === 4000, 'prompt not capped');
     },
     'schema_seeds_folders_with_backslashes' => function (PDO $db) {
@@ -335,6 +344,9 @@ $tests = [
     'card_from_prompt_and_command' => function (PDO $db) {
         // Only the prompts the board builds link, at the start (leading whitespace allowed).
         ok(card_from_prompt('/feature-planner Plan card #12 (Alpha): x') === 12, 'plan prompt');
+        ok(card_from_prompt('／feature-planner Plan card #55 (Portfolio): x') === 55, 'old plan prompt the app rewrote');
+        ok(card_from_prompt('Plan card #12 (Alpha): x') === 12 && card_from_prompt('Build card #13 (Alpha): x') === 13
+            && card_from_prompt('Review card #14 (Alpha): x') === 14, 'new prompts');
         ok(card_from_prompt('Build the plan for card #13 (Alpha): x') === 13, 'build prompt');
         ok(card_from_prompt('Review the code for card #14 (Alpha): x') === 14, 'review prompt');
         ok(card_from_prompt('Deploy card #15 (Alpha): x') === 15, 'deploy prompt');

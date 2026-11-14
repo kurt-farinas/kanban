@@ -791,16 +791,20 @@ function find_cards(PDO $db, string $text): array
 
 function claude_link(array $card, string $folder): ?string
 {
-    $verb = [
-        'planning' => '/feature-planner Plan card',
-        'building' => 'Build the plan for card',
-        'review' => 'Review the code for card',
-        'live' => 'Deploy card',
-    ][$card['col']] ?? null;
+    // Never start with "/": Claude desktop turns a leading slash in a link's prompt into a full-width "／" (no slash commands from links).
+    $id = $card['id'];
+    $plan = $card['plan_path'] ?? null;
+    [$verb, $ask] = [
+        'planning' => ['Plan', 'Use the feature-planner skill.'],
+        'building' => ['Build', $plan ? "Follow the plan in $plan." : "There is no plan file yet, so read the card's notes first."],
+        'review' => ['Review', 'Check the changes against ' . ($plan ? "the plan in $plan." : "the card's notes.")],
+        'live' => ['Deploy', "Follow the project's deploy rules and log it in DEPLOYMENTS.md with Card: #$id."],
+    ][$card['col']] ?? [null, null];
     if ($verb === null) {
         return null;
     }
-    $prompt = mb_substr("$verb #{$card['id']} ({$card['project']}): {$card['title']}", 0, 4000);
+    $title = rtrim($card['title'], '. ');
+    $prompt = mb_substr("$verb card #$id ({$card['project']}): $title. $ask", 0, 4000);
     return 'claude://code/new?prompt=' . rawurlencode($prompt) . '&folder=' . rawurlencode($folder);
 }
 
@@ -876,7 +880,9 @@ function notify(string $title, string $body): void
 function card_from_prompt(string $prompt): ?int
 {
     // Only the prompts the board builds (claude_link, app.js planLink): a prompt that merely mentions a card must not link.
-    $verbs = '\/feature-planner Plan card|Build the plan for card|Review the code for card|Deploy card|Update the plan for card';
+    // Older wordings stay so chats opened before 2026-11-14 still link ("／" is the app's rewrite of a leading "/").
+    $verbs = '(?:\/|／)feature-planner Plan card|Plan card|Build card|Review card|Deploy card|Update the plan for card'
+        . '|Build the plan for card|Review the code for card';
     return preg_match("/^\s*(?:$verbs) #(\d{1,9})\b/", $prompt, $m) ? (int) $m[1] : null;
 }
 
