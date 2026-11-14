@@ -100,7 +100,7 @@ body.offline .card-actions { display: none; }
     cursor: pointer;
 }
 
-#activity-toggle { margin-left: auto; }
+#requests-toggle { margin-left: auto; }
 
 .bar-btn:hover, .bar-btn[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
 
@@ -545,3 +545,33 @@ textarea { resize: vertical; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 button:disabled { opacity: 0.6; cursor: default; }
+
+/* Requests inbox and request tags: Do green, Change blue, Remove red. */
+.kind-tag[data-kind="do"] { color: #8fd694; background: rgba(76, 175, 80, 0.2); }
+.kind-tag[data-kind="change"] { color: #8ab8f0; background: rgba(66, 133, 244, 0.2); }
+.kind-tag[data-kind="remove"] { color: #f09a94; background: rgba(229, 83, 75, 0.2); }
+[data-theme="light"] .kind-tag[data-kind="do"] { color: #1e5e24; background: #e3f4e4; }
+[data-theme="light"] .kind-tag[data-kind="change"] { color: #1a4a8a; background: #e4eefb; }
+[data-theme="light"] .kind-tag[data-kind="remove"] { color: #8a1f19; background: #fbe6e4; }
+.live-since { font-size: 12px; color: var(--muted); }
+.request-add { margin: 10px 0; }
+.kinds { display: flex; gap: 4px; }
+.kind { position: relative; padding: 4px 10px; font-size: 13px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; cursor: pointer; }
+.kind input { position: absolute; opacity: 0; pointer-events: none; }
+.kind:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.kind[data-kind="do"]:has(input:checked) { color: #8fd694; background: rgba(76, 175, 80, 0.2); border-color: #8fd694; }
+.kind[data-kind="change"]:has(input:checked) { color: #8ab8f0; background: rgba(66, 133, 244, 0.2); border-color: #8ab8f0; }
+.kind[data-kind="remove"]:has(input:checked) { color: #f09a94; background: rgba(229, 83, 75, 0.2); border-color: #f09a94; }
+[data-theme="light"] .kind[data-kind="do"]:has(input:checked) { color: #1e5e24; background: #e3f4e4; border-color: #1e5e24; }
+[data-theme="light"] .kind[data-kind="change"]:has(input:checked) { color: #1a4a8a; background: #e4eefb; border-color: #1a4a8a; }
+[data-theme="light"] .kind[data-kind="remove"]:has(input:checked) { color: #8a1f19; background: #fbe6e4; border-color: #8a1f19; }
+.request-group h3 { margin: 12px 0 4px; font: 400 15px/1.2 ui-serif, Georgia, "Times New Roman", serif; }
+.requests-list { margin: 0; padding: 0; list-style: none; }
+.request { padding: 8px 10px; margin-bottom: 6px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; }
+.request-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.request-who { font-weight: 500; }
+.request-progress { margin-left: auto; font-size: 12px; color: var(--muted); }
+.request-body { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.request-actions { display: flex; align-items: center; gap: 6px; }
+.request-actions .row { flex: 1; }
+.request-actions input { flex: 1; min-width: 0; }

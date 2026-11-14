@@ -11,9 +11,10 @@ function board_version(): int
 // ORDER BY c.col sorts by ENUM index, which is COLUMNS order.
 const CARD_SELECT = 'SELECT c.id, c.title, c.col, c.position, c.blocked, c.blocked_reason,
         p.name AS project, p.color, p.folder, c.updated_by, c.updated_at,
-        c.status, c.working_since, c.plan_path,
+        c.status, c.working_since, c.plan_path, c.request_id, c.live_at,
+        r.kind AS request_kind, r.requester AS request_requester,
         (SELECT COUNT(*) FROM notes n WHERE n.card_id = c.id) AS note_count
-    FROM cards c JOIN projects p ON p.id = c.project_id';
+    FROM cards c JOIN projects p ON p.id = c.project_id LEFT JOIN requests r ON r.id = c.request_id';
 const CARD_ORDER = ' ORDER BY c.col, c.position, c.id';
 
 function check_by(string $by): void
@@ -99,15 +100,15 @@ function get_card(PDO $db, int $id): array
     return $st->fetch() ?: throw new InvalidArgumentException("No card #$id.");
 }
 
-function add_card(PDO $db, string $title, string $project, string $by): int
+function add_card(PDO $db, string $title, string $project, string $by, ?int $requestId = null): int
 {
     check_by($by);
     check_title($title);
     $pid = project_id($db, $project);
-    return in_tx($db, function () use ($db, $pid, $title, $by, $project) {
-        $st = $db->prepare("INSERT INTO cards (project_id, title, col, position, updated_by)
-            SELECT ?, ?, 'todo', COALESCE(MAX(position) + 1, 0), ? FROM cards WHERE col = 'todo'");
-        $st->execute([$pid, $title, $by]);
+    return in_tx($db, function () use ($db, $pid, $title, $by, $project, $requestId) {
+        $st = $db->prepare("INSERT INTO cards (project_id, title, col, position, updated_by, request_id)
+            SELECT ?, ?, 'todo', COALESCE(MAX(position) + 1, 0), ?, ? FROM cards WHERE col = 'todo'");
+        $st->execute([$pid, $title, $by, $requestId]);
         $id = (int) $db->lastInsertId();
         log_event($db, $id, $by, 'added', $project);
         return $id;
@@ -256,6 +257,9 @@ function move_card_once(PDO $db, int $id, string $col, string $by, ?int $positio
         $db->prepare('UPDATE cards SET col = ?, position = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
             ->execute([$col, $position, $by, $id]);
         renumber($db, $ids, $id);
+        if ($col === 'live' && $from !== 'live') {
+            $db->prepare('UPDATE cards SET live_at = CURDATE(), updated_at = updated_at WHERE id = ?')->execute([$id]);
+        }
         log_event($db, $id, $by, 'moved', "$from → $col");
         if ($from !== $col) {
             $st = $db->prepare('SELECT id FROM cards WHERE col = ? ORDER BY position, id FOR UPDATE');
@@ -296,6 +300,89 @@ function set_blocked(PDO $db, int $id, ?string $reason, string $by): void
     if ($blocked) {
         notify("Card #$id needs you", $reason);
     }
+}
+
+// --- Requests: what people asked for; each becomes one or more cards linked by cards.request_id ---
+
+const REQUEST_KINDS = ['do', 'change', 'remove'];
+
+// A request has no card, so its event carries card_id NULL and the request text as the title.
+function log_request_event(PDO $db, string $body, string $by, string $action, string $detail): void
+{
+    $db->prepare('INSERT INTO events (card_id, card_title, author, action, detail) VALUES (NULL, ?, ?, ?, ?)')
+        ->execute([mb_substr($body, 0, 200), $by, $action, mb_substr($detail, 0, 200)]);
+}
+
+function add_request(PDO $db, string $body, string $requester, string $project, string $kind, string $by): int
+{
+    check_by($by);
+    if (trim($body) === '' || mb_strlen($body) > 500) {
+        throw new InvalidArgumentException('Request text must be 1 to 500 characters.');
+    }
+    if (trim($requester) === '' || mb_strlen($requester) > 100) {
+        throw new InvalidArgumentException('Who asked must be 1 to 100 characters.');
+    }
+    if (!in_array($kind, REQUEST_KINDS, true)) {
+        throw new InvalidArgumentException("Unknown kind '$kind' (use do, change or remove).");
+    }
+    $pid = project_id($db, $project);
+    $requester = trim($requester);
+    return in_tx($db, function () use ($db, $body, $requester, $pid, $kind, $by, $project) {
+        $db->prepare('INSERT INTO requests (body, requester, project_id, kind) VALUES (?, ?, ?, ?)')
+            ->execute([$body, $requester, $pid, $kind]);
+        $id = (int) $db->lastInsertId();
+        log_request_event($db, $body, $by, 'request', "$kind · $requester · $project");
+        return $id;
+    });
+}
+
+// Newest first; state is new (no cards), done (every card in Live) or in_progress.
+function list_requests(PDO $db): array
+{
+    $rows = $db->query("SELECT r.id, r.body, r.requester, r.kind, r.created_at, p.name AS project, p.color,
+            COALESCE(SUM(c.col = 'live'), 0) AS cards_live,
+            COUNT(c.id) AS cards_total
+        FROM requests r JOIN projects p ON p.id = r.project_id LEFT JOIN cards c ON c.request_id = r.id
+        GROUP BY r.id ORDER BY r.id DESC")->fetchAll();
+    foreach ($rows as &$r) {
+        $r['cards_total'] = (int) $r['cards_total'];
+        $r['cards_live'] = (int) ($r['cards_live'] ?? 0);
+        $r['state'] = $r['cards_total'] === 0 ? 'new' : ($r['cards_live'] === $r['cards_total'] ? 'done' : 'in_progress');
+    }
+    return $rows;
+}
+
+function requesters(PDO $db): array
+{
+    return $db->query('SELECT DISTINCT requester FROM requests ORDER BY requester')->fetchAll(PDO::FETCH_COLUMN);
+}
+
+function card_from_request(PDO $db, int $requestId, string $title, string $by): int
+{
+    $st = $db->prepare('SELECT p.name FROM requests r JOIN projects p ON p.id = r.project_id WHERE r.id = ?');
+    $st->execute([$requestId]);
+    $project = $st->fetchColumn();
+    if ($project === false) {
+        throw new InvalidArgumentException("No request #$requestId.");
+    }
+    return add_card($db, $title, $project, $by, $requestId);
+}
+
+function delete_request(PDO $db, int $id, string $by): void
+{
+    check_by($by);
+    in_tx($db, function () use ($db, $id, $by) {
+        $st = $db->prepare('SELECT body, requester FROM requests WHERE id = ? FOR UPDATE');
+        $st->execute([$id]);
+        $r = $st->fetch() ?: throw new InvalidArgumentException("No request #$id.");
+        $st = $db->prepare('SELECT COUNT(*) FROM cards WHERE request_id = ?');
+        $st->execute([$id]);
+        if ($st->fetchColumn() > 0) {
+            throw new InvalidArgumentException('This request has cards; delete its cards first.');
+        }
+        log_request_event($db, $r['body'], $by, 'request_deleted', $r['requester']);
+        $db->prepare('DELETE FROM requests WHERE id = ?')->execute([$id]);
+    });
 }
 
 function find_cards(PDO $db, string $text): array

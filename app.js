@@ -372,8 +372,14 @@ function fillProjects(projects) {
         filter.add(new Option(p.name, p.name));
         projectSelect.add(new Option(p.name, p.name));
         editForm.elements.project.add(new Option(p.name, p.name));
+        requestForm.elements.project.add(new Option(p.name, p.name));
     }
 }
+
+const KINDS = { do: 'Do', change: 'Change', remove: 'Remove' };
+
+// "2026-11-12" -> "12 Nov"
+const shortDate = d => new Date(d + 'T00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
 function cardEl(c) {
     const card = el('article', 'card');
@@ -394,6 +400,13 @@ function cardEl(c) {
     const pill = el('span', 'pill', c.project);
     pill.dataset.color = c.color;
     tags.append(pill);
+    if (c.request_kind) {
+        const r = el('span', 'pill kind-tag', `${KINDS[c.request_kind]} · ${c.request_requester}`);
+        r.dataset.kind = c.request_kind;
+        r.title = 'Request card';
+        tags.append(r);
+    }
+    if (c.col === 'live' && c.live_at) tags.append(el('span', 'live-since', `Live since ${shortDate(c.live_at)}`));
     if (c.blocked) {
         const b = el('span', 'pill blocked', 'Blocked');
         b.title = c.blocked_reason || '';
@@ -893,6 +906,7 @@ document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
     if (openId !== null) closePanel();
     else if (!activity.hidden) toggleActivity(false);
+    else if (!requestsBox.hidden) toggleRequests(false);
 });
 
 editForm.elements.title.addEventListener('input', () => { editForm.querySelector('.field-error').hidden = true; });
@@ -1005,6 +1019,8 @@ function eventText(e) {
         case 'deleted': return `deleted ${n}`;
         case 'note': return `added a note to ${n}`;
         case 'plan': return `set the plan for ${n}`;
+        case 'request': return `added a request (${e.detail})`;
+        case 'request_deleted': return 'deleted a request';
         default: return `${e.action} ${n}`;
     }
 }
@@ -1066,14 +1082,148 @@ async function pollClaude() {
 function toggleActivity(open = activity.hidden) {
     activity.hidden = !open;
     activityToggle.setAttribute('aria-expanded', open);
-    if (open) loadEvents();
+    if (open) {
+        toggleRequests(false);
+        loadEvents();
+    }
 }
 
 activityToggle.addEventListener('click', () => toggleActivity());
 
+// --- Requests inbox: what people asked for, each turned into one or more request cards ---
+
+const requestsBox = document.getElementById('requests');
+const requestsToggle = document.getElementById('requests-toggle');
+const requestForm = document.getElementById('request-add');
+const STATES = [['new', 'New'], ['in_progress', 'In progress'], ['done', 'Done']];
+
+function requestEl(r) {
+    const li = el('li', 'request');
+    const head = el('div', 'request-head');
+    const kind = el('span', 'pill kind-tag', KINDS[r.kind]);
+    kind.dataset.kind = r.kind;
+    const project = el('span', 'pill', r.project);
+    project.dataset.color = r.color;
+    head.append(kind, el('span', 'request-who', r.requester), project);
+    if (r.cards_total > 0) head.append(el('span', 'request-progress', `${r.cards_live} of ${r.cards_total} Live`));
+    li.append(head, el('p', 'request-body', r.body));
+
+    const actions = el('div', 'request-actions');
+    const make = el('button', 'secondary', 'Make card');
+    make.type = 'button';
+    make.dataset.needsDb = '';
+    make.disabled = offline;
+    const form = el('form', 'row');
+    form.hidden = true;
+    form.noValidate = true;
+    const title = el('input', '');
+    title.maxLength = 200;
+    title.setAttribute('aria-label', 'Card title');
+    const add = el('button', 'primary', 'Add');
+    add.type = 'submit';
+    add.dataset.needsDb = '';
+    form.append(title, add);
+    make.addEventListener('click', () => {
+        form.hidden = false;
+        make.hidden = true;
+        title.value = r.body.slice(0, 200);
+        title.select();
+    });
+    form.addEventListener('submit', async e => {
+        e.preventDefault();
+        if (title.value.trim() === '') {
+            toast('Enter a title.', { kind: 'error' });
+            return;
+        }
+        try {
+            const { id } = await busy(add, api({ a: 'request_card', id: r.id, title: title.value }, true));
+            toast(`Card #${id} added to To do`);
+            loadRequests();
+            load();
+        } catch (err) {
+            toastError(err);
+        }
+    });
+    actions.append(make, form);
+    if (r.cards_total === 0) {
+        const del = el('button', 'close', 'Delete');
+        del.type = 'button';
+        del.dataset.needsDb = '';
+        del.disabled = offline;
+        del.addEventListener('click', async () => {
+            if (!(await confirmBox({ title: 'Delete this request?', body: `"${r.body}" from ${r.requester}`, ok: 'Delete', danger: true }))) return;
+            try {
+                await api({ a: 'request_delete', id: r.id }, true);
+                toast('Request deleted');
+            } catch (err) {
+                toastError(err);
+            }
+            loadRequests();
+        });
+        actions.append(del);
+    }
+    li.append(actions);
+    return li;
+}
+
+async function loadRequests() {
+    try {
+        const { requests, requesters } = await api({ a: 'requests' });
+        document.getElementById('requesters').replaceChildren(...requesters.map(n => new Option(n)));
+        const groups = STATES.map(([state, label]) => {
+            const mine = requests.filter(r => r.state === state);
+            if (!mine.length) return null;
+            const g = el('div', 'request-group');
+            const list = el('ul', 'requests-list');
+            list.append(...mine.map(requestEl));
+            g.append(el('h3', '', `${label} ${mine.length}`), list);
+            return g;
+        }).filter(Boolean);
+        requestsBox.querySelector('.request-list').replaceChildren(...(groups.length ? groups : [el('p', 'empty', 'No requests yet.')]));
+    } catch (e) {
+        showError(e);
+    }
+}
+
+function toggleRequests(open = requestsBox.hidden) {
+    requestsBox.hidden = !open;
+    requestsToggle.setAttribute('aria-expanded', open);
+    if (open) {
+        toggleActivity(false);
+        loadRequests();
+    }
+}
+
+requestsToggle.addEventListener('click', () => toggleRequests());
+
+requestForm.addEventListener('input', () => { requestForm.querySelector('.field-error').hidden = true; });
+
+requestForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = requestForm.elements;
+    const error = requestForm.querySelector('.field-error');
+    if (f.body.value.trim() === '' || f.requester.value.trim() === '') {
+        error.hidden = false;
+        toast(error.textContent, { kind: 'error' });
+        return;
+    }
+    try {
+        await busy(requestForm.querySelector('button[type=submit]'), api({
+            a: 'request_add', body: f.body.value, requester: f.requester.value, project: f.project.value, kind: f.kind.value,
+        }, true));
+        f.body.value = '';
+        toast('Request added');
+        loadRequests();
+    } catch (err) {
+        toastError(err);
+    }
+});
+
 function refresh() {
     load();
     if (!activity.hidden) loadEvents();
+    // A re-render would wipe a half-typed card title, so wait while focus is inside the inbox.
+    if (!requestsBox.hidden && !requestsBox.contains(document.activeElement)) loadRequests();
 }
 
 load();

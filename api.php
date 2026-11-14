@@ -3,12 +3,14 @@
 // GET: a=list[&project=Name], a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown).
 // POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project), a=delete (id), a=note (id, body),
 //       a=start_db (launches MySQL if it is not running; works without a database).
+// Requests: GET a=requests (requests + earlier requesters); POST a=request_add (body, requester, project, kind),
+//       a=request_card (id, title), a=request_delete (id).
 // A database that can't be reached answers 503 with db_down: true.
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
-const GET_ACTIONS = ['list', 'card', 'events', 'plan'];
-const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note', 'start_db'];
+const GET_ACTIONS = ['list', 'card', 'events', 'plan', 'requests'];
+const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note', 'start_db', 'request_add', 'request_card', 'request_delete'];
 
 function out(array $data, int $code = 200): never
 {
@@ -93,6 +95,15 @@ try {
             out(['ok' => true]);
         case 'note':
             out(['id' => add_note($db, int_param('id'), $_POST['body'] ?? '', 'user')]);
+        case 'requests':
+            out(['requests' => list_requests($db), 'requesters' => requesters($db)]);
+        case 'request_add':
+            out(['id' => add_request($db, $_POST['body'] ?? '', $_POST['requester'] ?? '', $_POST['project'] ?? '', $_POST['kind'] ?? '', 'user')]);
+        case 'request_card':
+            out(['id' => card_from_request($db, int_param('id'), $_POST['title'] ?? '', 'user')]);
+        case 'request_delete':
+            delete_request($db, int_param('id'), 'user');
+            out(['ok' => true]);
     }
     $id = int_param('id');
     $col = $_POST['col'] ?? '';

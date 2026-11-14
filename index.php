@@ -28,11 +28,31 @@ header('Cache-Control: no-cache');
         <label>Project
             <select id="filter"><option value="">All projects</option></select>
         </label>
+        <button type="button" id="requests-toggle" class="bar-btn" aria-expanded="false" aria-controls="requests">Requests</button>
         <button type="button" id="activity-toggle" class="bar-btn" aria-expanded="false" aria-controls="activity">Activity</button>
         <button type="button" id="theme" class="bar-btn" aria-label="Switch theme">Light</button>
         <section id="activity" class="activity" aria-label="Activity" hidden>
             <h2>Activity</h2>
             <ul class="events"></ul>
+        </section>
+        <section id="requests" class="activity" aria-label="Requests" hidden>
+            <h2>Requests</h2>
+            <form id="request-add" class="stack request-add" novalidate>
+                <textarea name="body" maxlength="500" rows="2" placeholder="What was asked" aria-label="Request"></textarea>
+                <input name="requester" maxlength="100" list="requesters" placeholder="Who asked" aria-label="Who asked" autocomplete="off">
+                <datalist id="requesters"></datalist>
+                <div class="row">
+                    <select name="project" aria-label="Project"></select>
+                    <div class="kinds" role="radiogroup" aria-label="Kind">
+                        <label class="kind" data-kind="do"><input type="radio" name="kind" value="do" checked>Do</label>
+                        <label class="kind" data-kind="change"><input type="radio" name="kind" value="change">Change</label>
+                        <label class="kind" data-kind="remove"><input type="radio" name="kind" value="remove">Remove</label>
+                    </div>
+                </div>
+                <p class="field-error" hidden>Write the request and who asked.</p>
+                <button type="submit" class="primary" data-needs-db>Add request</button>
+            </form>
+            <div class="request-list"></div>
         </section>
     </header>
     <main class="board">

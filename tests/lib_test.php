@@ -324,6 +324,60 @@ $tests = [
         $b = $env['KANBAN_TOAST_BODY'];
         ok(str_starts_with($b, '-Pick "A" or é? Next line x') && mb_strlen($b) === 200, "body not raw, joined and capped: $b");
     },
+    'request_add_validates' => function (PDO $db) {
+        throws(fn() => add_request($db, '  ', 'Al', 'Alpha', 'do', 'user'), 'empty body');
+        throws(fn() => add_request($db, 'Fix it', 'Al', 'Nope', 'do', 'user'), 'unknown project');
+        throws(fn() => add_request($db, 'Fix it', 'Al', 'Alpha', 'x', 'user'), "kind 'x'");
+        throws(fn() => add_request($db, 'Fix it', ' ', 'Alpha', 'do', 'user'), 'empty requester');
+        ok($db->query('SELECT COUNT(*) FROM requests')->fetchColumn() == 0, 'bad request written');
+        $id = add_request($db, '<b>Fix</b> it', 'Al', 'alpha', 'change', 'user');
+        ok($id > 0, 'no id');
+        $e = list_events($db);
+        ok(count($e) === 1 && $e[0]['action'] === 'request' && $e[0]['card_id'] === null
+            && $e[0]['card_title'] === '<b>Fix</b> it', json_encode($e));
+    },
+    'card_from_request_links_and_progress' => function (PDO $db) {
+        $rid = add_request($db, 'New page', 'Al', 'Beta', 'do', 'user');
+        $state = fn() => array_values(array_filter(list_requests($db), fn($r) => $r['id'] == $rid))[0];
+        ok($state()['state'] === 'new' && $state()['cards_total'] === 0, json_encode($state()));
+        $a = card_from_request($db, $rid, 'Part A', 'user');
+        $b = card_from_request($db, $rid, 'Part B', 'user');
+        $c = get_card($db, $a);
+        ok($c['col'] === 'todo' && $c['project'] === 'Beta' && $c['request_id'] == $rid
+            && $c['request_kind'] === 'do' && $c['request_requester'] === 'Al', json_encode($c));
+        move_card($db, $a, 'live', 'user');
+        $r = $state();
+        ok($r['cards_total'] === 2 && $r['cards_live'] === 1 && $r['state'] === 'in_progress', json_encode($r));
+        move_card($db, $b, 'live', 'claude');
+        ok($state()['state'] === 'done', json_encode($state()));
+        throws(fn() => card_from_request($db, 9999, 'X', 'user'), 'unknown request');
+    },
+    'delete_request_refuses_with_cards' => function (PDO $db) {
+        $rid = add_request($db, 'Remove banner', 'Al', 'Alpha', 'remove', 'user');
+        $cid = card_from_request($db, $rid, 'Remove banner', 'user');
+        throws(fn() => delete_request($db, $rid, 'user'), 'request with cards');
+        delete_card($db, $cid, 'user');
+        delete_request($db, $rid, 'user');
+        ok($db->query('SELECT COUNT(*) FROM requests')->fetchColumn() == 0, 'request left');
+        ok(list_events($db)[0]['action'] === 'request_deleted', list_events($db)[0]['action']);
+        throws(fn() => delete_request($db, $rid, 'user'), 'deleted twice');
+    },
+    'requesters_distinct_sorted' => function (PDO $db) {
+        foreach (['Bea', 'Al', 'Bea', 'Cy'] as $who) {
+            add_request($db, 'x', $who, 'Alpha', 'do', 'user');
+        }
+        ok(requesters($db) === ['Al', 'Bea', 'Cy'], implode(',', requesters($db)));
+    },
+    'move_to_live_sets_live_at_today' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        ok(card($db, $id)['live_at'] === null, 'live_at set on add');
+        move_card($db, $id, 'live', 'claude');
+        $today = $db->query('SELECT CURDATE()')->fetchColumn();
+        ok(card($db, $id)['live_at'] === $today, card($db, $id)['live_at'] . " != $today");
+        $db->exec("UPDATE cards SET live_at = '2020-01-01'");
+        move_card($db, $id, 'test', 'user');
+        ok(card($db, $id)['live_at'] === '2020-01-01', 'live_at changed on moving out');
+    },
     'board_version_tracks_newest_file' => function (PDO $db) {
         $f = dirname(__DIR__) . '/app.js';
         $old = filemtime($f);
@@ -349,6 +403,7 @@ $db->exec(file_get_contents(dirname(__DIR__) . '/seed.example.sql'));
 $pass = $fail = 0;
 foreach ($tests as $name => $fn) {
     $db->exec('DELETE FROM cards');
+    $db->exec('DELETE FROM requests');
     $db->exec('DELETE FROM events');
     try {
         $fn($db);
