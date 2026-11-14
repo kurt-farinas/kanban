@@ -230,6 +230,14 @@ function move_card_once(PDO $db, int $id, string $col, string $by, ?int $positio
         $st->execute([$col, $id]);
         $ids = $st->fetchAll(PDO::FETCH_COLUMN);
         $position = min($position ?? count($ids), count($ids));
+        if ($from === $col) {
+            $st = $db->prepare('SELECT position FROM cards WHERE id = ?');
+            $st->execute([$id]);
+            if ((int) $st->fetchColumn() === $position) { // dropped where it was: nothing to write or log
+                $db->commit();
+                return;
+            }
+        }
         array_splice($ids, $position, 0, [$id]);
 
         $db->prepare('UPDATE cards SET col = ?, position = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')

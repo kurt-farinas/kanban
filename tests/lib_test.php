@@ -213,6 +213,18 @@ $tests = [
         $got = array_map(fn($e) => "{$e['action']}:{$e['author']}:{$e['card_title']}", list_events($db));
         ok($got === ['note:user:A', 'moved:claude:A', 'added:user:A'], implode(',', $got));
     },
+    'same_place_move_logs_nothing' => function (PDO $db) {
+        $a = add_card($db, 'A', 'Alpha', 'user');
+        $b = add_card($db, 'B', 'Alpha', 'user');
+        $db->exec("UPDATE cards SET updated_at = '2020-01-01'");
+        move_card($db, $a, 'todo', 'claude', 0);
+        move_card($db, $b, 'todo', 'claude'); // already last
+        move_card($db, $b, 'todo', 'claude', 9); // capped to last
+        ok(count(list_events($db)) === 2, 'no-op move logged');
+        ok(card($db, $a)['updated_by'] === 'user' && card($db, $b)['updated_at'] === '2020-01-01 00:00:00', 'no-op move wrote');
+        move_card($db, $a, 'todo', 'claude', 1);
+        ok(col_order($db) === ['0:B', '1:A'] && count(list_events($db)) === 3, 'real reorder not done or not logged');
+    },
     'card_from_prompt_and_command' => function (PDO $db) {
         ok(card_from_prompt('/feature-planner Plan card #12 (Alpha): x') === 12, 'prompt link');
         ok(card_from_prompt('see CARD #7, thanks') === 7, 'case-insensitive');
