@@ -23,6 +23,8 @@ let seq = 0; // only the newest list response renders
 let openId = null; // card shown in the details panel
 let openCard = null;
 let filledSection = ''; // the section the edit form was last filled with; the 10s poll must not change it
+let filledTitle = ''; // title and project the edit form was filled with: sent with a save so a change Claude made meanwhile is caught
+let filledProject = '';
 let blockedIds = null; // blocked card ids at the last poll; null = record silently
 let unseenBlocks = 0;
 let workingIds = null; // card ids with the working dot at the last render; null = record silently
@@ -49,7 +51,11 @@ async function api(params, post = false) {
         // No response at all = Apache is down.
         throw goOffline(new Error(res ? `Server error (${res.status}).` : "Can't reach the server."), !res || res.status === 503, false, n);
     }
-    if (!res.ok) throw goOffline(new Error(data.error || `Server error (${res.status}).`), res.status === 503, data.db_down, n);
+    if (!res.ok) {
+        const err = new Error(data.error || `Server error (${res.status}).`);
+        err.status = res.status;
+        throw goOffline(err, res.status === 503, data.db_down, n);
+    }
     banner.hidden = true;
     if (params.a !== 'start_db') { // start_db answers without the database
         okSeq = Math.max(okSeq, n);
@@ -721,6 +727,12 @@ function beep() {
 
 window.addEventListener('focus', seen);
 document.addEventListener('visibilitychange', seen);
+// The poll skips refreshes while the tab is hidden, so catch up on return.
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden || offline) return;
+    refresh();
+    if (openId !== null) showCard(false);
+});
 document.addEventListener('pointerdown', seen);
 
 // Auto-update: reload when the board's code changes. A new version must show on two polls in a row
@@ -732,7 +744,11 @@ let updatePending = false;
 function userBusy() {
     const el = document.activeElement;
     const typing = el && el.matches('input, textarea, select') && el.value !== '' && el.id !== 'filter';
-    return dragging || typing || pendingDeletes.size > 0 || opening > 0 || confirmDone || reportDialog.open || projectsDialog.open;
+    // Typed text that lost focus still counts: a reload would wipe it.
+    const f = editForm.elements;
+    const unsaved = noteForm.elements.body.value.trim() !== '' || (openId !== null
+        && (f.title.value !== filledTitle || f.project.value !== filledProject || f.section.value !== filledSection));
+    return dragging || typing || unsaved || pendingDeletes.size > 0 || opening > 0 || confirmDone || reportDialog.open || projectsDialog.open;
 }
 
 function tryReload() {
@@ -1113,10 +1129,10 @@ async function showCard(fill, select = false) {
     const c = openCard = data.card;
     document.getElementById('panel-heading').textContent = `Card #${c.id}`;
     // The card's project was renamed: its old name is gone from the dropdown, so show the new one.
-    if (editForm.elements.project.selectedIndex < 0) editForm.elements.project.value = c.project;
+    if (editForm.elements.project.selectedIndex < 0) editForm.elements.project.value = filledProject = c.project;
     if (fill) {
-        editForm.elements.title.value = c.title;
-        editForm.elements.project.value = c.project;
+        editForm.elements.title.value = filledTitle = c.title;
+        editForm.elements.project.value = filledProject = c.project;
         fillSections(editForm.elements.section, c.project, filledSection = c.section ?? '');
         if (select && !panel.hidden) editForm.elements.title.select();
         showChatBtn(c); // not on every poll: the lookup reads the app's chat files
@@ -1185,7 +1201,7 @@ editForm.addEventListener('submit', async e => {
     const sameProject = openCard && openCard.project === f.project.value;
     try {
         await busy(editForm.querySelector('button[type=submit]'), (async () => {
-            await api({ a: 'edit', id, title, project: f.project.value }, true);
+            await api({ a: 'edit', id, title, project: f.project.value, was_title: filledTitle, was_project: filledProject }, true);
             // edit clears the section when the project changes, so compare with what the server now holds.
             const now = sameProject ? before : '';
             if (f.section.value !== now) await api({ a: 'section', id, section: f.section.value }, true);
@@ -1194,7 +1210,9 @@ editForm.addEventListener('submit', async e => {
         showCard(true);
         refresh();
     } catch (err) {
-        toastError(err);
+        if (err.status !== 409) return toastError(err);
+        toast(err.message + ' You typed: "' + title + '"', { kind: 'error' });
+        showCard(true);
     }
 });
 
@@ -1778,8 +1796,8 @@ load();
 pollClaude();
 setInterval(() => {
     if (offline) return; // the offline countdown does the retrying
-    pollClaude();
-    if (dragging) return;
+    pollClaude(); // keeps running while hidden: its toast, sound and title alerts are for a hidden tab
+    if (dragging || document.hidden) return;
     refresh();
     if (openId !== null) showCard(false);
 }, 10000);

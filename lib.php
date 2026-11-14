@@ -134,13 +134,24 @@ function add_card(PDO $db, string $title, string $project, string $by, ?int $req
     });
 }
 
-function edit_card(PDO $db, int $id, string $title, string $project, string $by): void
+// The board's edit form sends the title and project it was filled with; a different current value means
+// Claude changed the card meanwhile. Fields are compared, not updated_at, so moves and notes do not conflict.
+class CardConflict extends InvalidArgumentException {}
+
+function edit_card(PDO $db, int $id, string $title, string $project, string $by,
+    ?string $wasTitle = null, ?string $wasProject = null): void
 {
     check_by($by);
     check_title($title);
     $pid = project_id($db, $project);
-    in_tx($db, function () use ($db, $id, $pid, $title, $by, $project) {
+    in_tx($db, function () use ($db, $id, $pid, $title, $by, $project, $wasTitle, $wasProject) {
         card_col($db, $id, true);
+        $st = $db->prepare('SELECT c.title, p.name FROM cards c JOIN projects p ON p.id = c.project_id WHERE c.id = ? FOR UPDATE');
+        $st->execute([$id]);
+        [$curTitle, $curProject] = $st->fetch(PDO::FETCH_NUM);
+        if (($wasTitle !== null && $wasTitle !== $curTitle) || ($wasProject !== null && $wasProject !== $curProject)) {
+            throw new CardConflict('Claude changed this card while you were editing. Your edit was not saved.');
+        }
         // Sections belong to one project, so a project change clears it; section_id is set first, before project_id changes.
         $db->prepare('UPDATE cards SET section_id = IF(project_id = ?, section_id, NULL), title = ?, project_id = ?,
                 updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')

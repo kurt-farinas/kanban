@@ -791,6 +791,21 @@ $tests = [
         $c = get_card($db, $id);
         ok($c['project'] === 'Beta' && $c['section'] === null && $c['section_id'] === null, json_encode($c));
     },
+    'edit_card_refuses_stale_edit' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        edit_card($db, $id, 'A2', 'Alpha', 'claude');
+        $refused = false;
+        try {
+            edit_card($db, $id, 'X', 'Alpha', 'user', 'A', 'Alpha');
+        } catch (CardConflict) {
+            $refused = true;
+        }
+        ok($refused, 'stale edit was not refused');
+        ok(get_card($db, $id)['title'] === 'A2', 'stale edit overwrote the title');
+        move_card($db, $id, 'building', 'claude');
+        edit_card($db, $id, 'X', 'Alpha', 'user', 'A2', 'Alpha');
+        ok(get_card($db, $id)['title'] === 'X', 'a move made a current edit conflict');
+    },
     'report_cards_grouping' => function (PDO $db) {
         $pid = project_id($db, 'Gamma');
         $db->prepare("INSERT INTO sections (project_id, name, position) VALUES (?, 'Sec2', 2), (?, 'Sec1', 1)")->execute([$pid, $pid]);

@@ -2,7 +2,7 @@
 // JSON API for the web board.
 // GET: a=list[&project=Name] (first moves cards named in new verified DEPLOYMENTS.md entries to Live), a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown), a=chat&id=N (url + title of the card's desktop-app chat; 404 if none),
 //      a=report_preview&project=P&from=YYYY-MM-DD&to=YYYY-MM-DD (counts of done, underway and no-section cards).
-// POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project), a=delete (id), a=note (id, body), a=section (id, section; blank clears),
+// POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project, optional was_title/was_project: 409 conflict if the card changed), a=delete (id), a=note (id, body), a=section (id, section; blank clears),
 //       a=start_db (launches MySQL if it is not running; works without a database).
 // Requests: GET a=requests (requests + earlier requesters); POST a=request_add (body, requester, project, kind),
 //       a=request_card (id, title), a=request_delete (id).
@@ -124,7 +124,8 @@ try {
         case 'add':
             out(['id' => add_card($db, $_POST['title'] ?? '', $_POST['project'] ?? '', 'user', null, $_POST['section'] ?? null)]);
         case 'edit':
-            edit_card($db, int_param('id'), $_POST['title'] ?? '', $_POST['project'] ?? '', 'user');
+            edit_card($db, int_param('id'), $_POST['title'] ?? '', $_POST['project'] ?? '', 'user',
+                $_POST['was_title'] ?? null, $_POST['was_project'] ?? null);
             out(['ok' => true]);
         case 'section':
             set_section($db, int_param('id'), $_POST['section'] ?? '', 'user');
@@ -168,6 +169,8 @@ try {
     move_card($db, $id, $col, 'user', int_param('position', true));
     $card = get_card($db, $id);
     out(['ok' => true, 'link' => $from === $col ? null : claude_link($card, $card['folder'])]);
+} catch (CardConflict $e) {
+    out(['error' => $e->getMessage(), 'conflict' => true], 409);
 } catch (InvalidArgumentException $e) {
     out(['error' => $e->getMessage()], 400);
 } catch (Throwable $e) {
