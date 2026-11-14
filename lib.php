@@ -417,6 +417,7 @@ function write_sections(PDO $db, int $pid, string $project, array $sections, str
 }
 
 const REPORT_UNDERWAY = ['building', 'review', 'test'];
+const REPORT_PLANNED = ['todo', 'planning']; // not started: feeds the report's "Recommended next action"
 
 function check_date(string $d): void
 {
@@ -440,25 +441,26 @@ function report_cards(PDO $db, string $project, string $from, string $to): array
     $p = $st->fetch();
     $groups = [];
     foreach (list_sections($db, $p['name']) as $s) {
-        $groups[(int) $s['id']] = ['name' => $s['name'], 'other' => false, 'done' => [], 'underway' => []];
+        $groups[(int) $s['id']] = ['name' => $s['name'], 'other' => false, 'done' => [], 'underway' => [], 'planned' => []];
     }
-    $groups[0] = ['name' => 'Other changes', 'other' => true, 'done' => [], 'underway' => []];
+    $groups[0] = ['name' => 'Other changes', 'other' => true, 'done' => [], 'underway' => [], 'planned' => []];
 
-    $in = implode(',', array_fill(0, count(REPORT_UNDERWAY), '?'));
+    $open = [...REPORT_UNDERWAY, ...REPORT_PLANNED];
+    $in = implode(',', array_fill(0, count($open), '?'));
     $st = $db->prepare("SELECT id, title, col, live_at, section_id FROM cards
         WHERE project_id = ? AND ((col = 'live' AND live_at BETWEEN ? AND ?) OR col IN ($in))
         ORDER BY col, position, id");
-    $st->execute([$p['id'], $from, $to, ...REPORT_UNDERWAY]);
+    $st->execute([$p['id'], $from, $to, ...$open]);
     $notes = $db->prepare('SELECT body FROM notes WHERE card_id = ? ORDER BY id');
     foreach ($st->fetchAll() as $c) {
         $notes->execute([$c['id']]);
         $card = ['id' => (int) $c['id'], 'title' => $c['title'], 'col' => $c['col'], 'live_at' => $c['live_at'],
             'notes' => $notes->fetchAll(PDO::FETCH_COLUMN)];
         $key = isset($groups[(int) $c['section_id']]) ? (int) $c['section_id'] : 0;
-        $groups[$key][$c['col'] === 'live' ? 'done' : 'underway'][] = $card;
+        $groups[$key][$c['col'] === 'live' ? 'done' : (in_array($c['col'], REPORT_PLANNED, true) ? 'planned' : 'underway')][] = $card;
     }
     return ['site_name' => $p['site_name'], 'project' => $p['name'], 'from' => $from, 'to' => $to,
-        'sections' => array_values(array_filter($groups, fn($g) => $g['done'] || $g['underway']))];
+        'sections' => array_values(array_filter($groups, fn($g) => $g['done'] || $g['underway'] || $g['planned']))];
 }
 
 function delete_card(PDO $db, int $id, string $by): void

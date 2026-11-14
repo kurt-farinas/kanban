@@ -860,10 +860,16 @@ $tests = [
             ok($d === ['id' => $done, 'title' => 'Done in range', 'col' => 'live', 'live_at' => '2026-11-14', 'notes' => ['first', 'second']],
                 json_encode($d));
             ok(array_column($s[2]['underway'], 'title') === ['Review'] && $s[2]['done'] === [], json_encode($s[2]));
+            ok(array_column($s[0]['planned'], 'title') === ['Todo', 'Planning'], json_encode($s[0]['planned']));
+            ok($s[1]['planned'] === [] && $s[2]['planned'] === [], 'planned only in Sec1');
             ok(array_column($s, 'other') === [false, false, true], json_encode(array_column($s, 'other')));
             // Underway cards count whatever the dates; an old range drops only the Done ones.
             ok(array_column(report_cards($db, 'Gamma', '2026-01-01', '2026-01-02')['sections'], 'name') === ['Sec1', 'Other changes'],
                 'old range kept Done cards');
+            // A section with only planned cards is still listed.
+            $db->exec("UPDATE cards SET col = 'live', live_at = '2026-11-10' WHERE title = 'Building'");
+            ok(array_column(report_cards($db, 'Gamma', '2026-01-01', '2026-01-02')['sections'], 'name') === ['Sec1', 'Other changes'],
+                'section with only planned cards dropped');
         } finally {
             $db->exec('DELETE FROM cards');
             $db->prepare('DELETE FROM sections WHERE project_id = ?')->execute([$pid]);

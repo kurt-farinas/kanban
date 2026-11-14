@@ -1,7 +1,7 @@
 <?php
 // JSON API for the web board.
 // GET: a=list[&project=Name] (first moves cards named in new verified DEPLOYMENTS.md entries to Live), a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown), a=chat&id=N (url + title of the card's desktop-app chat; 404 if none),
-//      a=report_preview&project=P&from=YYYY-MM-DD&to=YYYY-MM-DD (counts of done, underway and no-section cards).
+//      a=report_preview&project=P&from=YYYY-MM-DD&to=YYYY-MM-DD (counts of done, underway, planned and no-section cards).
 // POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project, optional was_title/was_project: 409 conflict if the card changed), a=delete (id), a=note (id, body), a=section (id, section; blank clears),
 //       a=start_db (launches MySQL if it is not running; works without a database).
 // Requests: GET a=requests (requests + earlier requesters); POST a=request_add (body, requester, project, kind),
@@ -136,6 +136,7 @@ try {
             $count = fn(array $groups, string $k) => array_sum(array_map(fn($g) => count($g[$k]), $groups));
             $other = array_filter($r['sections'], fn($g) => $g['other']); // report_cards' group for cards with no section
             out(['done' => $count($r['sections'], 'done'), 'underway' => $count($r['sections'], 'underway'),
+                'planned' => $count($r['sections'], 'planned'),
                 'no_section' => $count($other, 'done') + $count($other, 'underway')]);
         case 'delete':
             delete_card($db, int_param('id'), 'user');

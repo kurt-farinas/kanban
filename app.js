@@ -1677,7 +1677,7 @@ async function preview(my) {
     try {
         const r = await api({ a: 'report_preview', project: f.project.value, from: f.from.value, to: f.to.value });
         if (my !== previewSeq) return;
-        text.textContent = `${r.done} done · ${r.underway} underway · ${r.no_section} with no section`;
+        text.textContent = `${r.done} done · ${r.underway} underway · ${r.planned} planned · ${r.no_section} with no section`;
         if (r.no_section > 0) {
             warn.textContent = `${r.no_section} ${r.no_section === 1 ? 'card has' : 'cards have'} no section; they'll go under Other changes.`;
             warn.hidden = false;
