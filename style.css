@@ -147,6 +147,7 @@ select:focus, input:focus, textarea:focus, button:focus-visible, .card:focus-vis
     border: 1px solid var(--border);
     border-radius: 10px;
     cursor: grab;
+    position: relative;
     overflow-wrap: anywhere;
     transition: border-color 0.15s, background 0.15s;
 }
@@ -368,3 +369,51 @@ textarea { resize: vertical; }
 .md th, .md td { padding: 4px 8px; text-align: left; border: 1px solid var(--border); }
 
 .md a { color: var(--accent); }
+
+.card-actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
+.card:hover .card-actions, .card:focus-within .card-actions { opacity: 1; }
+@media (hover: none) { .card-actions { opacity: 0.5; } }
+
+.card-act {
+    padding: 2px 6px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--muted);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.card-act:hover { color: var(--text); border-color: var(--accent); }
+.card-act[data-act="delete"]:hover { color: var(--danger); border-color: var(--danger); }
+
+.ctx-menu {
+    position: fixed;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    min-width: 170px;
+    padding: 4px;
+    background: var(--col);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.ctx-item {
+    padding: 6px 10px;
+    font: inherit;
+    text-align: left;
+    color: var(--text);
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.ctx-item:hover, .ctx-item:focus-visible { background: var(--accent-soft); outline: none; }
+.ctx-sub { padding-left: 22px; }
+.ctx-danger { color: var(--danger); }
+.ctx-label { padding: 6px 10px 2px; font-size: 12px; color: var(--muted); }
+.ctx-sep { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--border); }

@@ -193,6 +193,7 @@ function cardEl(c) {
     card.draggable = true;
     card.tabIndex = 0;
     card.dataset.id = c.id;
+    card.title = 'Click for details · drag to move · right-click for more';
     const title = el('div', 'title');
     if (isWorking(c)) {
         const dot = el('span', 'dot');
@@ -217,6 +218,15 @@ function cardEl(c) {
         tags.append(n);
     }
     card.append(tags);
+    const actions = el('div', 'card-actions');
+    for (const [act, icon, verb] of [['edit', '✎', 'Edit'], ['delete', '🗑', 'Delete']]) {
+        const b = el('button', 'card-act', icon);
+        b.type = 'button';
+        b.dataset.act = act;
+        b.setAttribute('aria-label', `${verb} card #${c.id}`);
+        actions.append(b);
+    }
+    card.append(actions);
     return card;
 }
 
@@ -294,6 +304,16 @@ function dropPosition() {
 
 const board = document.querySelector('.board');
 
+async function moveCard(params) {
+    try {
+        const res = await api(params, true);
+        if (res.link) window.location.href = res.link;
+    } catch (err) {
+        showError(err);
+    }
+    load();
+}
+
 board.addEventListener('mousedown', () => { dragged = false; });
 
 board.addEventListener('dragstart', e => {
@@ -314,10 +334,91 @@ board.addEventListener('dragend', () => {
     if (!dropped) load(); // cancelled: undo the preview
 });
 
+// A button inside a draggable card would start the card's drag, so switch dragging off while it is pressed.
+board.addEventListener('pointerdown', e => {
+    const card = e.target.closest('.card');
+    if (card && e.target.closest('.card-actions')) {
+        card.draggable = false;
+        document.addEventListener('pointerup', () => { card.draggable = true; }, { once: true });
+    }
+});
+
 board.addEventListener('click', e => {
     const card = e.target.closest('.card');
-    if (card && !dragged) openPanel(card.dataset.id);
+    if (!card || dragged) return;
+    const act = e.target.closest('.card-act');
+    if (!act) openPanel(card.dataset.id);
+    else if (act.dataset.act === 'edit') openPanel(card.dataset.id, true);
+    else deleteCard(card.dataset.id);
 });
+
+board.addEventListener('dblclick', e => {
+    const card = e.target.closest('.card');
+    if (card && !e.target.closest('.card-actions')) openPanel(card.dataset.id, true);
+});
+
+board.addEventListener('contextmenu', e => {
+    const card = e.target.closest('.card');
+    if (!card) return;
+    e.preventDefault();
+    openMenu(card, e.clientX, e.clientY);
+});
+
+// --- Right-click menu ---
+
+let menu = null;
+
+function closeMenu(refocus = false) {
+    if (!menu) return;
+    const card = menu.card;
+    menu.remove();
+    menu = null;
+    if (refocus) card.focus();
+}
+
+function openMenu(card, x, y) {
+    closeMenu();
+    const id = card.dataset.id;
+    menu = el('div', 'ctx-menu');
+    menu.card = card;
+    menu.setAttribute('role', 'menu');
+    const item = (text, fn, className = 'ctx-item') => {
+        const b = el('button', className, text);
+        b.type = 'button';
+        b.setAttribute('role', 'menuitem');
+        b.addEventListener('click', () => { closeMenu(); fn(); });
+        menu.append(b);
+    };
+    item('Open details', () => openPanel(id));
+    item('Edit title', () => openPanel(id, true));
+    menu.append(el('div', 'ctx-label', 'Move to ▸'));
+    for (const col of Object.keys(LABELS)) {
+        if (col !== cards.get(id)?.col) item(LABELS[col], () => moveCard({ a: 'move', id, col }), 'ctx-item ctx-sub');
+    }
+    menu.append(el('hr', 'ctx-sep'));
+    item('Delete…', () => deleteCard(id), 'ctx-item ctx-danger');
+    document.body.append(menu);
+    // Keep the menu inside the viewport.
+    menu.style.left = Math.max(0, Math.min(x, innerWidth - menu.offsetWidth)) + 'px';
+    menu.style.top = Math.max(0, Math.min(y, innerHeight - menu.offsetHeight)) + 'px';
+    menu.querySelector('button').focus();
+}
+
+document.addEventListener('pointerdown', e => { if (menu && !menu.contains(e.target)) closeMenu(); });
+document.addEventListener('scroll', () => closeMenu(), true);
+window.addEventListener('blur', () => closeMenu());
+document.addEventListener('keydown', e => {
+    if (!menu) return;
+    const items = [...menu.querySelectorAll('button')];
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') {
+        e.stopImmediatePropagation(); // closes the menu only, not the panel behind it
+        closeMenu(true);
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+    }
+}, true);
 
 board.addEventListener('keydown', e => {
     const card = e.target.closest('.card');
@@ -343,13 +444,7 @@ for (const section of document.querySelectorAll('.column')) {
         const params = { a: 'move', id: dragging.dataset.id, col: section.dataset.col };
         const pos = dropPosition();
         if (pos !== null) params.position = pos;
-        try {
-            const res = await api(params, true);
-            if (res.link) window.location.href = res.link;
-        } catch (err) {
-            showError(err);
-        }
-        load();
+        moveCard(params);
     });
 }
 
@@ -387,7 +482,7 @@ const planLink = c => 'claude://code/new?prompt='
     + encodeURIComponent(`Update the plan for card #${c.id} (${c.project}): `)
     + '&folder=' + encodeURIComponent(c.folder);
 
-function openPanel(id) {
+function openPanel(id, editTitle = false) {
     openId = String(id);
     openCard = null;
     editForm.querySelector('.field-error').hidden = true;
@@ -401,8 +496,8 @@ function openPanel(id) {
     panel.querySelector('.notes').replaceChildren();
     panel.querySelector('.plan').replaceChildren();
     panel.hidden = overlay.hidden = false;
-    panel.querySelector('.close').focus();
-    showCard(true);
+    (editTitle ? editForm.elements.title : panel.querySelector('.close')).focus();
+    showCard(true, editTitle);
 }
 
 function closePanel() {
@@ -415,7 +510,7 @@ function closePanel() {
 }
 
 // fill = also reset the edit form (on open and after a save), so a poll never wipes typing.
-async function showCard(fill) {
+async function showCard(fill, select = false) {
     const id = openId;
     let data;
     try {
@@ -433,6 +528,7 @@ async function showCard(fill) {
     if (fill) {
         editForm.elements.title.value = c.title;
         editForm.elements.project.value = c.project;
+        if (select && !panel.hidden) editForm.elements.title.select();
     }
     panel.querySelector('.working').hidden = !isWorking(c);
     const status = [LABELS[c.col] || c.col];
@@ -462,7 +558,11 @@ function noteEl(n) {
 }
 
 panel.querySelector('.close').addEventListener('click', closePanel);
-overlay.addEventListener('click', closePanel);
+// The second click of a double-click lands on the overlay the first one opened: treat it as "edit title".
+overlay.addEventListener('click', e => {
+    if (e.detail > 1 && openId !== null) editForm.elements.title.focus();
+    else closePanel();
+});
 
 document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
@@ -511,17 +611,18 @@ document.getElementById('plan-btn').addEventListener('click', () => {
     if (openCard) window.location.href = planLink(openCard);
 });
 
-document.getElementById('delete').addEventListener('click', async () => {
-    const id = openId;
+async function deleteCard(id) {
     if (!confirm(`Delete card #${id}? This can't be undone.`)) return;
     try {
         await api({ a: 'delete', id }, true);
-        closePanel();
+        if (openId === String(id)) closePanel();
         refresh();
     } catch (err) {
         showError(err);
     }
-});
+}
+
+document.getElementById('delete').addEventListener('click', () => deleteCard(openId));
 
 // --- Activity ---
 
