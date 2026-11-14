@@ -1,6 +1,9 @@
 <?php
 require __DIR__ . '/lib.php';
 $labels = array_combine(COLUMNS, ['To do', 'Planning', 'Building', 'Review', 'You test', 'Live']);
+// Version assets by file time so an open app window never keeps running old code after an update.
+$v = fn(string $f) => $f . '?v=' . filemtime(__DIR__ . '/' . $f);
+header('Cache-Control: no-cache');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -12,7 +15,7 @@ $labels = array_combine(COLUMNS, ['To do', 'Planning', 'Building', 'Review', 'Yo
         // Runs before paint so the saved theme never flashes; storage can be blocked, so default to dark.
         try { if (localStorage.getItem('theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch (e) {}
     </script>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="<?= $v('style.css') ?>">
 </head>
 <body>
     <div id="error" class="banner" role="alert" hidden></div>
@@ -75,7 +78,7 @@ $labels = array_combine(COLUMNS, ['To do', 'Planning', 'Building', 'Review', 'Yo
             <button type="button" id="delete" class="danger">Delete card</button>
         </div>
     </aside>
-    <script src="app.js"></script>
+    <script src="<?= $v('app.js') ?>"></script>
     <script>
         (function () {
             const btn = document.getElementById('theme');
