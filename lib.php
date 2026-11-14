@@ -222,11 +222,15 @@ function move_card(PDO $db, int $id, string $col, string $by, ?int $position = n
     if ($position !== null && $position < 0) {
         throw new InvalidArgumentException('Position must be 0 or more.');
     }
-    // Concurrent moves in opposite directions can deadlock; InnoDB rolls one back, so retry it.
+    retry_deadlock(fn() => move_card_once($db, $id, $col, $by, $position));
+}
+
+// Concurrent moves in opposite directions can deadlock; InnoDB rolls one back, so retry it (3 tries).
+function retry_deadlock(callable $fn): mixed
+{
     for ($try = 1; ; $try++) {
         try {
-            move_card_once($db, $id, $col, $by, $position);
-            return;
+            return $fn();
         } catch (PDOException $e) {
             if ($try >= 3 || ($e->errorInfo[1] ?? 0) !== 1213) {
                 throw $e;
@@ -387,26 +391,45 @@ function delete_request(PDO $db, int $id, string $by): void
 
 // --- Live from DEPLOYMENTS.md: a verified deploy entry naming "Card: #N" (or "card #N" in its heading) moves card N to Live ---
 
-// One section: [date, title, card ids], or null when it is not a dated, verified, UTF-8 entry.
+// One section: [date, title, card ids, entry key], or null when it is not a dated, verified, UTF-8 entry.
+// The key is the heading's date + time only, so editing an entry's title later does not apply it again.
 function parse_deploy_entry(string $section): ?array
 {
     $lines = explode("\n", str_replace("\r", '', $section));
     if (!mb_check_encoding($section, 'UTF-8')
-        || !preg_match('/^## (\d{4})-(\d{2})-(\d{2})(?:\s+\d{1,2}:\d{2})?\s*(.*)$/u', $lines[0], $h)
+        || !preg_match('/^##[ \t]+(\d{4})-(\d{2})-(\d{2})(?:[ \t]+(\d{1,2}:\d{2}))?\s*(.*)$/u', $lines[0], $h)
         || !checkdate((int) $h[2], (int) $h[3], (int) $h[1])
-        || !preg_match('/^[ \t]*-[ \t]*Verified:[ \t]*(?!none\b)\S/imu', $section)) {
+        || !deploy_verified($lines)) {
         return null;
     }
-    $parts = explode(' — ', preg_replace('/^—\s*/u', '', trim($h[4])));
+    $parts = preg_split('/\s+[—-]\s+/u', preg_replace('/^[—-]\s*/u', '', trim($h[5])));
     $title = preg_replace('/\s*\(cards?:?\s*#[^)]*\)\s*$/iu', '', trim(end($parts)));
     $ids = [];
-    foreach ([$lines[0], ...preg_grep('/^\s*-\s*Card:/iu', $lines)] as $line) {
-        if (preg_match_all('/\bcards?:?\s*(#\d{1,9}(?:\s*(?:,|and|&)\s*#\d{1,9})*)/iu', $line, $m)) {
+    foreach ([$lines[0], ...preg_grep('/^\s*-\s*Cards?:/iu', $lines)] as $line) {
+        if (preg_match_all('/\bcards?:?\s*(#\d{1,9}(?:(?:\s*(?:,|&|\band\b)\s*|\s+)#\d{1,9})*)/iu', $line, $m)) {
             preg_match_all('/#(\d+)/', implode(' ', $m[1]), $n);
             array_push($ids, ...array_map('intval', $n[1]));
         }
     }
-    return ["$h[1]-$h[2]-$h[3]", $title, array_unique($ids)];
+    $date = "$h[1]-$h[2]-$h[3]";
+    return [$date, $title, array_unique($ids), trim("$date $h[4]")];
+}
+
+// The first "- Verified:" line has text, or a more indented non-empty line right under it,
+// and that text is not "none", "not …", "no …", "skipped", "pending" or an untouched "<template>".
+function deploy_verified(array $lines): bool
+{
+    foreach ($lines as $i => $line) {
+        if (preg_match('/^([ \t]*)-[ \t]*Verified:(.*)$/iu', $line, $m)) {
+            $text = trim($m[2]);
+            $next = $lines[$i + 1] ?? '';
+            if ($text === '' && trim($next) !== '' && strspn($next, " \t") > strlen($m[1])) {
+                $text = preg_replace('/^[-*+][ \t]*/', '', trim($next));
+            }
+            return $text !== '' && !preg_match('/^(?:none|not|no\b|skipped|pending|<)/iu', $text);
+        }
+    }
+    return false;
 }
 
 // Reads each project's DEPLOYMENTS.md whose mtime changed since the last run; returns how many cards moved to Live.
@@ -414,31 +437,36 @@ function parse_deploy_entry(string $section): ?array
 function sync_deployments(PDO $db): int
 {
     clearstatcache();
-    $seen = $db->query('SELECT file, mtime FROM deploy_sync')->fetchAll(PDO::FETCH_KEY_PAIR);
+    $seen = $db->query('SELECT file, mtime, size FROM deploy_sync')->fetchAll(PDO::FETCH_UNIQUE | PDO::FETCH_ASSOC);
     $moved = 0;
     foreach ($db->query('SELECT id, folder FROM projects')->fetchAll() as $p) {
-        $file = rtrim($p['folder'], '\\/') . DIRECTORY_SEPARATOR . 'DEPLOYMENTS.md';
-        $mtime = @filemtime($file);
-        if ($mtime === false || (int) ($seen[$file] ?? -1) === $mtime) {
+        $folder = rtrim(trim($p['folder']), '\\/');
+        if ($folder === '') {
+            continue; // a blank folder would read \DEPLOYMENTS.md
+        }
+        $file = $folder . DIRECTORY_SEPARATOR . 'DEPLOYMENTS.md';
+        $stat = @stat($file);
+        // mtime has 1-second resolution, so the size also catches a rewrite within the same second
+        if ($stat === false || $stat['size'] > 5 * 1024 * 1024
+            || ((int) ($seen[$file]['mtime'] ?? -1) === $stat['mtime'] && (int) $seen[$file]['size'] === $stat['size'])) {
             continue;
         }
         $text = @file_get_contents($file);
         if ($text === false) {
             continue;
         }
-        foreach (preg_split('/^(?=## )/m', $text) as $section) {
+        foreach (preg_split('/^(?=##[ \t])/m', preg_replace('/^\xEF\xBB\xBF/', '', $text)) as $section) {
             $entry = parse_deploy_entry($section);
             if ($entry === null) {
                 continue;
             }
-            [$date, $title, $ids] = $entry;
-            $hash = sha1(trim(strtok($section, "\n")));
+            [$date, $title, $ids, $key] = $entry;
             foreach ($ids as $id) {
-                $moved += (int) sync_card_live($db, $file, $hash, $id, (int) $p['id'], $date, $title);
+                $moved += (int) retry_deadlock(fn() => sync_card_live($db, $file, sha1($key), $id, (int) $p['id'], $date, $title));
             }
         }
-        $db->prepare('INSERT INTO deploy_sync (file, mtime) VALUES (?, ?) ON DUPLICATE KEY UPDATE mtime = VALUES(mtime)')
-            ->execute([$file, $mtime]);
+        $db->prepare('INSERT INTO deploy_sync (file, mtime, size) VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE mtime = VALUES(mtime), size = VALUES(size)')->execute([$file, $stat['mtime'], $stat['size']]);
     }
     return $moved;
 }
@@ -450,12 +478,10 @@ function sync_card_live(PDO $db, string $file, string $hash, int $id, int $proje
         $st = $db->prepare('SELECT col, project_id FROM cards WHERE id = ? FOR UPDATE');
         $st->execute([$id]);
         $c = $st->fetch();
-        if ($c === false || (int) $c['project_id'] !== $projectId) {
-            return false;
-        }
+        // Recorded for an unknown card or one of another project too, so a typo'd or future number never moves a card later.
         $st = $db->prepare('INSERT IGNORE INTO deploy_applied (file, heading_hash, card_id) VALUES (?, ?, ?)');
         $st->execute([$file, $hash, $id]);
-        if ($st->rowCount() === 0 || $c['col'] === 'live') {
+        if ($st->rowCount() === 0 || $c === false || (int) $c['project_id'] !== $projectId || $c['col'] === 'live') {
             return false;
         }
         $pos = $db->query("SELECT COALESCE(MAX(position) + 1, 0) FROM cards WHERE col = 'live' FOR UPDATE")->fetchColumn();

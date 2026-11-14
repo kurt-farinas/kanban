@@ -67,7 +67,11 @@ try {
     }
     switch ($a) {
         case 'list':
-            sync_deployments($db); // cheap: reads a DEPLOYMENTS.md only when its mtime changed
+            try {
+                sync_deployments($db); // cheap: reads a DEPLOYMENTS.md only when its mtime or size changed
+            } catch (Throwable $e) {
+                error_log('kanban deploy sync: ' . $e->getMessage()); // the board still loads
+            }
             $project = $_GET['project'] ?? '';
             out([
                 'cards' => list_cards($db, $project === '' ? null : $project),

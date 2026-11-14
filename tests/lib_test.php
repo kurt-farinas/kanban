@@ -431,11 +431,16 @@ $tests = [
             rewrite_log($file, entry('2026-11-12 16:15 — data only — Fix', "- Card: #99999\n"));
             ok(sync_deployments($db) === 0, 'unknown card moved something');
             $mtime = filemtime($file);
-            file_put_contents($file, entry('2026-11-12 16:15 — data only — Fix', "- Card: #$id\n"));
-            touch($file, $mtime); // same mtime: sync must not read it again
+            $same = entry('2026-11-12 16:15 — data only — Fix', '- Card: #' . str_pad($id, 5, '0', STR_PAD_LEFT) . "\n");
+            file_put_contents($file, $same);
+            touch($file, $mtime); // same mtime and size: sync must not read it again
             clearstatcache();
             ok(sync_deployments($db) === 0, 'unchanged file parsed again');
             ok(card($db, $id)['col'] === 'todo', 'card moved from an unchanged file');
+            file_put_contents($file, "$same\n");
+            touch($file, $mtime); // rewritten within the same second: the size differs
+            clearstatcache();
+            ok(sync_deployments($db) === 1 && card($db, $id)['col'] === 'live', 'same-second rewrite not parsed');
         });
     },
     'sync_parses_heading_card_mention' => function (PDO $db) {
@@ -473,6 +478,64 @@ $tests = [
             move_card($db, $id, 'test', 'user');
             rewrite_log($file, entry('2026-11-13 10:00 — def — Other', "- Card: none\n") . $md);
             ok(sync_deployments($db) === 0 && card($db, $id)['col'] === 'test', 'moved back into Live');
+        });
+    },
+    'sync_accepts_verified_sub_bullets' => function (PDO $db) {
+        with_deploy_log($db, '', function ($file) use ($db) {
+            $a = add_card($db, 'A', 'Deploys', 'user');
+            $b = add_card($db, 'B', 'Deploys', 'user');
+            rewrite_log($file, "## 2026-11-12 16:15 — abc — A\n- Card: #$a\n- Verified:\n  - live page shows the fix\n  - totals add up\n\n"
+                . "## 2026-11-13 09:00 — def — B\n- Card: #$b\n- Verified:\n- Backup: none\n");
+            ok(sync_deployments($db) === 1, 'not 1 moved');
+            ok(card($db, $a)['col'] === 'live' && card($db, $b)['col'] === 'todo', 'wrong cards moved');
+        });
+    },
+    'sync_rejects_not_verified_wording' => function (PDO $db) {
+        with_deploy_log($db, '', function ($file) use ($db) {
+            $words = ["not verified (skipped at user's request)", '<what was checked on the live site>', 'Pending',
+                'skipped', 'no check yet', "\n  - none"];
+            $ids = [];
+            $md = '';
+            foreach ($words as $i => $v) {
+                $ids[] = $id = add_card($db, "C$i", 'Deploys', 'user');
+                $md .= entry(sprintf('2026-11-%02d 10:00 — abc — C%d', $i + 1, $i), "- Card: #$id\n", $v);
+            }
+            $good = add_card($db, 'OK', 'Deploys', 'user');
+            rewrite_log($file, $md . entry('2026-11-20 10:00 — abc — OK', "- Card: #$good\n", 'live page checked'));
+            ok(sync_deployments($db) === 1 && card($db, $good)['col'] === 'live', 'verified entry not moved');
+            foreach ($ids as $i => $id) {
+                ok(card($db, $id)['col'] === 'todo', "moved with Verified: $words[$i]");
+            }
+        });
+    },
+    'sync_unknown_card_never_applies_later' => function (PDO $db) {
+        with_deploy_log($db, '', function ($file) use ($db) {
+            $other = add_card($db, 'B', 'Alpha', 'user');
+            $next = $other + 1;
+            $md = entry('2026-11-12 16:15 — abc — Fix', "- Card: #$next, #$other\n");
+            rewrite_log($file, $md);
+            ok(sync_deployments($db) === 0, 'moved something');
+            $id = add_card($db, 'Typo target', 'Deploys', 'user');
+            ok($id === $next, "new card is #$id, not #$next");
+            edit_card($db, $other, 'B', 'Deploys', 'user');
+            rewrite_log($file, $md);
+            ok(sync_deployments($db) === 0 && card($db, $id)['col'] === 'todo' && card($db, $other)['col'] === 'todo',
+                'an earlier entry moved a later card');
+        });
+    },
+    'sync_parser_variants' => function (PDO $db) {
+        with_deploy_log($db, '', function ($file) use ($db) {
+            $a = add_card($db, 'A', 'Deploys', 'user');
+            $b = add_card($db, 'B', 'Deploys', 'user');
+            $c = add_card($db, 'C', 'Deploys', 'user');
+            rewrite_log($file, "\xEF\xBB\xBF## 2026-11-12 16:15 - abc123 - Fix totals\n- Cards: #$a #$b\n- Verified: totals ok\n\n"
+                . "##  2026-11-13 09:00 — def — Second\n- Card: #$c\n- Verified: ok\n");
+            ok(sync_deployments($db) === 3, 'not 3 moved');
+            $live = array_column(array_filter(list_events($db), fn($e) => $e['action'] === 'live'), 'detail');
+            ok(in_array('2026-11-12 Fix totals', $live) && in_array('2026-11-13 Second', $live), json_encode($live));
+            move_card($db, $a, 'test', 'user');
+            rewrite_log($file, "## 2026-11-12 16:15 - abc123 - Fix totals, retitled\n- Cards: #$a #$b\n- Verified: totals ok\n");
+            ok(sync_deployments($db) === 0 && card($db, $a)['col'] === 'test', 'retitled entry applied again');
         });
     },
     'board_version_tracks_newest_file' => function (PDO $db) {

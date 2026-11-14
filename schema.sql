@@ -64,10 +64,11 @@ CREATE TABLE sessions (
     FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Last DEPLOYMENTS.md mtime parsed per file.
+-- Last DEPLOYMENTS.md mtime and size parsed per file.
 CREATE TABLE deploy_sync (
     file VARCHAR(500) PRIMARY KEY,
-    mtime INT NOT NULL
+    mtime INT NOT NULL,
+    size INT NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Deploy entry/card pairs already applied, so a card moved back out of Live stays out.
