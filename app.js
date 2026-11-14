@@ -378,6 +378,16 @@ function fillProjects(projects) {
 
 const KINDS = { do: 'Do', change: 'Change', remove: 'Remove' };
 
+let projectInfo = new Map(); // name -> {name, color, folder, site_name, sections} from the last list
+
+// Fills a section dropdown with that project's sections; hidden for a project without any.
+function fillSections(select, project, value = '') {
+    const names = projectInfo.get(project)?.sections ?? [];
+    select.replaceChildren(new Option('No section', ''), ...names.map(n => new Option(n, n)));
+    select.value = names.includes(value) ? value : '';
+    select.hidden = names.length === 0;
+}
+
 // "2026-11-12" -> "12 Nov"
 const shortDate = d => new Date(d + 'T00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
@@ -455,6 +465,11 @@ function cardEl(c) {
         const line = el('span', 'title-line', c.title);
         line.title = c.title;
         card.append(dot, el('span', 'card-id', `#${c.id}`), line);
+        if (c.section) {
+            const s = el('span', 'pill section-pill', c.section);
+            s.title = c.section;
+            card.append(s);
+        }
         if (c.blocked) {
             const b = el('span', 'blocked-mini');
             b.title = `Blocked: ${c.blocked_reason || ''}`;
@@ -478,6 +493,7 @@ function cardEl(c) {
     const pill = el('span', 'pill', c.project);
     pill.dataset.color = c.color;
     tags.append(pill);
+    if (c.section) tags.append(el('span', 'pill section-pill', c.section));
     if (c.request_kind) {
         const r = el('span', 'pill kind-tag', `${KINDS[c.request_kind]} · ${c.request_requester}`);
         r.dataset.kind = c.request_kind;
@@ -508,6 +524,7 @@ function cardEl(c) {
 
 function render(data) {
     fillProjects(data.projects);
+    projectInfo = new Map(data.projects.map(p => [p.name, p]));
     cards = new Map(data.cards.map(c => [String(c.id), c]));
     pruneExpanded(data.cards, filter.value === '');
     const shown = data.cards.filter(c => !pendingDeletes.has(String(c.id)));
@@ -588,7 +605,7 @@ let updatePending = false;
 function userBusy() {
     const el = document.activeElement;
     const typing = el && el.matches('input, textarea, select') && el.value !== '' && el.id !== 'filter';
-    return dragging || typing || pendingDeletes.size > 0 || opening > 0 || confirmDone;
+    return dragging || typing || pendingDeletes.size > 0 || opening > 0 || confirmDone || reportDialog.open;
 }
 
 function tryReload() {
@@ -880,8 +897,11 @@ filter.addEventListener('change', () => {
 addOpen.addEventListener('click', () => {
     addForm.hidden = false;
     addOpen.hidden = true;
+    fillSections(addForm.elements.section, projectSelect.value);
     titleInput.focus();
 });
+
+projectSelect.addEventListener('change', () => fillSections(addForm.elements.section, projectSelect.value));
 
 titleInput.addEventListener('input', () => { titleError.hidden = true; });
 
@@ -894,7 +914,7 @@ addForm.addEventListener('submit', async e => {
     }
     try {
         await busy(addForm.querySelector('button[type=submit]'),
-            api({ a: 'add', title: titleInput.value, project: projectSelect.value }, true));
+            api({ a: 'add', title: titleInput.value, project: projectSelect.value, section: addForm.elements.section.value }, true));
         titleInput.value = '';
         toast('Card added');
         load();
@@ -918,6 +938,7 @@ function openPanel(id, editTitle = false) {
     // Blank the last card's details so they never show under the new heading while loading.
     document.getElementById('panel-heading').textContent = `Card #${id}`;
     editForm.elements.title.value = '';
+    fillSections(editForm.elements.section, null);
     panel.querySelector('.panel-status').textContent = '';
     panel.querySelector('.working').hidden = true;
     panel.querySelector('.notes').replaceChildren();
@@ -955,6 +976,7 @@ async function showCard(fill, select = false) {
     if (fill) {
         editForm.elements.title.value = c.title;
         editForm.elements.project.value = c.project;
+        fillSections(editForm.elements.section, c.project, c.section ?? '');
         if (select && !panel.hidden) editForm.elements.title.select();
     }
     panel.querySelector('.working').hidden = !isWorking(c);
@@ -992,13 +1014,16 @@ overlay.addEventListener('click', e => {
 });
 
 document.addEventListener('keydown', e => {
-    if (e.key !== 'Escape') return;
+    if (e.key !== 'Escape' || reportDialog.open) return; // the dialog closes itself
     if (openId !== null) closePanel();
     else if (!activity.hidden) toggleActivity(false);
     else if (!requestsBox.hidden) toggleRequests(false);
 });
 
 editForm.elements.title.addEventListener('input', () => { editForm.querySelector('.field-error').hidden = true; });
+// Keeps the chosen name when the new project has one of the same name (e.g. Whole System).
+editForm.elements.project.addEventListener('change', () =>
+    fillSections(editForm.elements.section, editForm.elements.project.value, editForm.elements.section.value));
 
 editForm.addEventListener('submit', async e => {
     e.preventDefault();
@@ -1009,9 +1034,16 @@ editForm.addEventListener('submit', async e => {
         toast(error.textContent, { kind: 'error' });
         return;
     }
+    const f = editForm.elements;
+    const id = openId;
+    const before = openCard;
     try {
-        await busy(editForm.querySelector('button[type=submit]'),
-            api({ a: 'edit', id: openId, title, project: editForm.elements.project.value }, true));
+        await busy(editForm.querySelector('button[type=submit]'), (async () => {
+            await api({ a: 'edit', id, title, project: f.project.value }, true);
+            // edit clears the section when the project changes, so compare with what the server now holds.
+            const now = before && before.project === f.project.value ? before.section ?? '' : '';
+            if (f.section.value !== now) await api({ a: 'section', id, section: f.section.value }, true);
+        })());
         toast('Card saved');
         showCard(true);
         refresh();
@@ -1108,6 +1140,7 @@ function eventText(e) {
         case 'deleted': return `deleted ${n}`;
         case 'note': return `added a note to ${n}`;
         case 'plan': return `set the plan for ${n}`;
+        case 'section': return e.detail === 'none' ? `cleared the section of ${n}` : `put ${n} under ${e.detail}`;
         case 'request': return `added a request (${e.detail})`;
         case 'request_deleted': return 'deleted a request';
         case 'live': return `${n} went live — ${e.detail}`;
@@ -1308,6 +1341,84 @@ requestForm.addEventListener('submit', async e => {
     } catch (err) {
         toastError(err);
     }
+});
+
+// --- Make report: pick a website and dates, then open Claude in its folder with the request typed in ---
+
+const reportDialog = document.getElementById('report');
+const reportForm = reportDialog.querySelector('form');
+const reportOk = reportForm.querySelector('button[type=submit]');
+const BOARD_CMD = 'C:\\xampp\\php\\php.exe C:\\xampp\\htdocs\\kanban\\board.php';
+const PREVIEW_MS = 300;
+let previewSeq = 0; // only the newest preview answer counts
+let previewTimer = null;
+
+const localToday = () => new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+
+function schedulePreview(ms = PREVIEW_MS) {
+    const my = ++previewSeq;
+    reportOk.disabled = true;
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => preview(my), ms);
+}
+
+async function preview(my) {
+    const f = reportForm.elements;
+    const text = reportForm.querySelector('.report-preview');
+    const warn = reportForm.querySelector('.report-warn');
+    warn.hidden = true;
+    const problem = !f.from.value ? 'Pick a start date.' : !f.to.value ? 'Pick an end date.'
+        : f.from.value > f.to.value ? 'The start date is after the end date.' : null;
+    if (problem) {
+        text.textContent = problem;
+        return;
+    }
+    text.textContent = 'Counting…';
+    try {
+        const r = await api({ a: 'report_preview', project: f.project.value, from: f.from.value, to: f.to.value });
+        if (my !== previewSeq) return;
+        text.textContent = `${r.done} done · ${r.underway} underway · ${r.no_section} with no section`;
+        if (r.no_section > 0) {
+            warn.textContent = `${r.no_section} ${r.no_section === 1 ? 'card has' : 'cards have'} no section; they'll go under Other changes.`;
+            warn.hidden = false;
+        }
+        reportOk.disabled = r.done + r.underway === 0;
+    } catch (err) {
+        if (my === previewSeq) text.textContent = err.message;
+    }
+}
+
+document.getElementById('report-open').addEventListener('click', () => {
+    const sites = [...projectInfo.values()].filter(p => p.sections.length);
+    if (!sites.length) {
+        toast('No website has sections yet.', { kind: 'error' });
+        return;
+    }
+    const f = reportForm.elements;
+    f.project.replaceChildren(...sites.map(p => new Option(p.site_name || p.name, p.name)));
+    if (sites.some(p => p.name === filter.value)) f.project.value = filter.value;
+    f.from.value = '';
+    f.to.value = localToday();
+    schedulePreview(0);
+    reportDialog.showModal();
+    f.from.focus();
+});
+
+reportForm.addEventListener('input', () => schedulePreview());
+document.getElementById('report-cancel').addEventListener('click', () => reportDialog.close());
+reportDialog.addEventListener('click', e => { if (e.target === reportDialog) reportDialog.close(); }); // backdrop
+
+reportForm.addEventListener('submit', e => {
+    e.preventDefault();
+    if (reportOk.disabled) return;
+    const f = reportForm.elements;
+    const p = projectInfo.get(f.project.value);
+    const site = p.site_name || p.name;
+    const prompt = `Make the president report for ${site} from ${f.from.value} to ${f.to.value} using the weekly-report-for-president skill. `
+        + `Get the cards with: ${BOARD_CMD} report "${p.name}" ${f.from.value} ${f.to.value}`;
+    reportDialog.close();
+    openLink('claude://code/new?prompt=' + encodeURIComponent(prompt) + '&folder=' + encodeURIComponent(p.folder));
+    toast(`Opening Claude for the ${site} report…`);
 });
 
 function refresh() {

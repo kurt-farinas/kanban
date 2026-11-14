@@ -13,13 +13,14 @@ function board_version(): int
 // ORDER BY c.col sorts by ENUM index, which is COLUMNS order.
 const CARD_SELECT = 'SELECT c.id, c.title, c.col, c.position, c.blocked, c.blocked_reason,
         p.name AS project, p.color, p.folder, c.updated_by, c.updated_at,
-        c.status, c.working_since, c.plan_path, c.request_id, c.live_at,
+        c.status, c.working_since, c.plan_path, c.request_id, c.live_at, c.section_id, s.name AS section,
         r.kind AS request_kind, r.requester AS request_requester,
         (SELECT COUNT(*) FROM notes n WHERE n.card_id = c.id) AS note_count,
         GREATEST(c.updated_at, COALESCE((SELECT MAX(n.created_at) FROM notes n WHERE n.card_id = c.id), c.updated_at),
             COALESCE((SELECT MAX(e.created_at) FROM events e WHERE e.card_id = c.id), c.updated_at)) AS last_activity,
         NOW() AS now_at
-    FROM cards c JOIN projects p ON p.id = c.project_id LEFT JOIN requests r ON r.id = c.request_id';
+    FROM cards c JOIN projects p ON p.id = c.project_id LEFT JOIN requests r ON r.id = c.request_id
+        LEFT JOIN sections s ON s.id = c.section_id';
 const CARD_ORDER = ' ORDER BY c.col, c.position, c.id';
 
 function check_by(string $by): void
@@ -116,15 +117,16 @@ function get_card(PDO $db, int $id): array
     return $st->fetch() ?: throw new InvalidArgumentException("No card #$id.");
 }
 
-function add_card(PDO $db, string $title, string $project, string $by, ?int $requestId = null): int
+function add_card(PDO $db, string $title, string $project, string $by, ?int $requestId = null, ?string $section = null): int
 {
     check_by($by);
     check_title($title);
     $pid = project_id($db, $project);
-    return in_tx($db, function () use ($db, $pid, $title, $by, $project, $requestId) {
-        $st = $db->prepare("INSERT INTO cards (project_id, title, col, position, updated_by, request_id)
-            SELECT ?, ?, 'todo', COALESCE(MAX(position) + 1, 0), ?, ? FROM cards WHERE col = 'todo'");
-        $st->execute([$pid, $title, $by, $requestId]);
+    $sid = section_id($db, $pid, $project, $section)['id'];
+    return in_tx($db, function () use ($db, $pid, $title, $by, $project, $requestId, $sid) {
+        $st = $db->prepare("INSERT INTO cards (project_id, title, col, position, updated_by, request_id, section_id)
+            SELECT ?, ?, 'todo', COALESCE(MAX(position) + 1, 0), ?, ?, ? FROM cards WHERE col = 'todo'");
+        $st->execute([$pid, $title, $by, $requestId, $sid]);
         $id = (int) $db->lastInsertId();
         log_event($db, $id, $by, 'added', $project);
         return $id;
@@ -138,10 +140,98 @@ function edit_card(PDO $db, int $id, string $title, string $project, string $by)
     $pid = project_id($db, $project);
     in_tx($db, function () use ($db, $id, $pid, $title, $by, $project) {
         card_col($db, $id, true);
-        $db->prepare('UPDATE cards SET title = ?, project_id = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-            ->execute([$title, $pid, $by, $id]);
+        // Sections belong to one project, so a project change clears it; section_id is set first, before project_id changes.
+        $db->prepare('UPDATE cards SET section_id = IF(project_id = ?, section_id, NULL), title = ?, project_id = ?,
+                updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            ->execute([$pid, $title, $pid, $by, $id]);
         log_event($db, $id, $by, 'edited', $project);
     });
+}
+
+// --- Sections: a website's parts, in report order; a card carries at most one of its own project's ---
+
+function list_sections(PDO $db, string $project): array
+{
+    $st = $db->prepare('SELECT id, name, position FROM sections WHERE project_id = ? ORDER BY position, id');
+    $st->execute([project_id($db, $project)]);
+    return $st->fetchAll();
+}
+
+// ['id' => …, 'name' => …] of $section in project $pid (case ignored); null or blank gives both null.
+function section_id(PDO $db, int $pid, string $project, ?string $section): array
+{
+    if ($section === null || trim($section) === '') {
+        return ['id' => null, 'name' => null];
+    }
+    $st = $db->prepare('SELECT id, name FROM sections WHERE project_id = ? ORDER BY position, id');
+    $st->execute([$pid]);
+    $rows = $st->fetchAll();
+    foreach ($rows as $r) {
+        if (mb_strtolower($r['name']) === mb_strtolower(trim($section))) {
+            return ['id' => (int) $r['id'], 'name' => $r['name']];
+        }
+    }
+    throw new InvalidArgumentException("Unknown section '$section' for $project. Sections: "
+        . (implode(', ', array_column($rows, 'name')) ?: 'none'));
+}
+
+// Null or blank clears it.
+function set_section(PDO $db, int $id, ?string $section, string $by): void
+{
+    check_by($by);
+    in_tx($db, function () use ($db, $id, $section, $by) {
+        card_col($db, $id, true);
+        $card = get_card($db, $id);
+        $s = section_id($db, project_id($db, $card['project']), $card['project'], $section);
+        $db->prepare('UPDATE cards SET section_id = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            ->execute([$s['id'], $by, $id]);
+        log_event($db, $id, $by, 'section', $s['name'] ?? 'none');
+    });
+}
+
+const REPORT_UNDERWAY = ['building', 'review', 'test'];
+
+function check_date(string $d): void
+{
+    $dt = DateTime::createFromFormat('!Y-m-d', $d);
+    if ($dt === false || $dt->format('Y-m-d') !== $d) {
+        throw new InvalidArgumentException("Bad date '$d' (use YYYY-MM-DD).");
+    }
+}
+
+// A project's cards for the president report, one group per section in report order, then "Other changes".
+// Done = Live with live_at in [from, to]; underway = Building, Review or Test (the current column wins). Empty groups are left out.
+function report_cards(PDO $db, string $project, string $from, string $to): array
+{
+    check_date($from);
+    check_date($to);
+    if ($from > $to) {
+        throw new InvalidArgumentException("Start date $from is after end date $to.");
+    }
+    $st = $db->prepare('SELECT id, name, site_name FROM projects WHERE id = ?');
+    $st->execute([project_id($db, $project)]);
+    $p = $st->fetch();
+    $groups = [];
+    foreach (list_sections($db, $p['name']) as $s) {
+        $groups[(int) $s['id']] = ['name' => $s['name'], 'done' => [], 'underway' => []];
+    }
+    $groups[0] = ['name' => 'Other changes', 'done' => [], 'underway' => []];
+
+    $in = implode(',', array_fill(0, count(REPORT_UNDERWAY), '?'));
+    $st = $db->prepare("SELECT id, title, col, live_at, section_id FROM cards
+        WHERE project_id = ? AND ((col = 'live' AND live_at BETWEEN ? AND ?) OR col IN ($in))
+        ORDER BY col, position, id");
+    $st->execute([$p['id'], $from, $to, ...REPORT_UNDERWAY]);
+    $notes = $db->prepare('SELECT body FROM notes WHERE card_id = ? ORDER BY id');
+    foreach ($st->fetchAll() as $c) {
+        $notes->execute([$c['id']]);
+        $card = ['id' => (int) $c['id'], 'title' => $c['title'], 'col' => $c['col'], 'live_at' => $c['live_at'],
+            'notes' => $notes->fetchAll(PDO::FETCH_COLUMN)];
+        $key = isset($groups[(int) $c['section_id']]) ? (int) $c['section_id'] : 0;
+        $groups[$key][$c['col'] === 'live' ? 'done' : 'underway'][] = $card;
+    }
+    return ['site_name' => $p['site_name'], 'project' => $p['name'], 'from' => $from, 'to' => $to,
+        'sections' => array_values(array_filter($groups, fn($g) => $g['done'] || $g['underway']))];
 }
 
 function delete_card(PDO $db, int $id, string $by): void

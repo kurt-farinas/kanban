@@ -2,7 +2,18 @@ CREATE TABLE projects (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(50) NOT NULL UNIQUE,
     folder VARCHAR(255) NOT NULL,
-    color VARCHAR(20) NOT NULL
+    color VARCHAR(20) NOT NULL,
+    site_name VARCHAR(100) NULL -- the name staff see, for report titles
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- A website's parts, in report order; a card can carry one section of its own project.
+CREATE TABLE sections (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    project_id INT NOT NULL,
+    name VARCHAR(60) NOT NULL,
+    position INT NOT NULL,
+    UNIQUE (project_id, name),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE requests (
@@ -30,7 +41,9 @@ CREATE TABLE cards (
     working_since TIMESTAMP NULL DEFAULT NULL,
     request_id INT NULL,
     live_at DATE NULL,
+    section_id INT NULL,
     FOREIGN KEY (project_id) REFERENCES projects(id),
+    FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE SET NULL,
     FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE SET NULL,
     INDEX (col, position)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

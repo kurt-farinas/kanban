@@ -29,7 +29,7 @@ Database settings other than XAMPP's default (`root`, no password) go in `config
 ## Command line (used by Claude)
 
 ```
-php board.php add "<title>" <project>     # prints #id
+php board.php add "<title>" <project> [section]  # prints #id
 php board.php move <id> <column> [pos]    # todo, planning, building, review, test, live
 php board.php block <id> "<question>"
 php board.php unblock <id>
@@ -38,6 +38,9 @@ php board.php status <id> "<text>"        # what Claude is doing now; "" clears
 php board.php note <id> "<text>"
 php board.php notes <id>                  # oldest first
 php board.php plan <id> <path>            # a .md file inside the project folder
+php board.php section <id> "<name>"       # one of the card's project sections; none clears
+php board.php sections <project>          # the project's sections, in report order
+php board.php report <project> <from> <to>  # JSON of Done and underway cards per section, dates YYYY-MM-DD
 php board.php sync                        # cards named in new verified DEPLOYMENTS.md entries go Live; prints the count
 ```
 

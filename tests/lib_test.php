@@ -601,6 +601,91 @@ $tests = [
             ok($stuck($x) === 4, "$col card: " . var_export($stuck($x), true));
         }
     },
+    'sections_set_and_clear' => function (PDO $db) {
+        ok(array_column(list_sections($db, 'alpha'), 'name') === ['Members', 'Loans', 'Whole System'],
+            json_encode(list_sections($db, 'alpha')));
+        ok(list_sections($db, 'Gamma') === [], 'Gamma has sections');
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        ok(get_card($db, $id)['section'] === null, 'section set on add');
+        set_section($db, $id, 'Loans', 'claude');
+        ok(get_card($db, $id)['section'] === 'Loans', 'Loans not set');
+        set_section($db, $id, null, 'claude');
+        set_section($db, $id, 'loans', 'claude');
+        ok(get_card($db, $id)['section'] === 'Loans', 'lower-case loans not matched');
+        $msg = '';
+        try {
+            set_section($db, $id, 'Nope', 'claude');
+        } catch (InvalidArgumentException $e) {
+            $msg = $e->getMessage();
+        }
+        ok(str_contains($msg, 'Sections:') && str_contains($msg, 'Loans'), "message: $msg");
+        throws(fn() => set_section($db, $id, 'Payroll', 'claude'), "Beta's section on an Alpha card");
+        ok(get_card($db, $id)['section'] === 'Loans', 'bad name changed the section');
+        set_section($db, $id, null, 'user');
+        ok(get_card($db, $id)['section'] === null, 'not cleared');
+        ok(list_events($db)[0]['action'] === 'section' && list_events($db)[0]['detail'] === 'none', json_encode(list_events($db)[0]));
+        $b = add_card($db, 'B', 'Alpha', 'claude', null, 'whole system');
+        ok(get_card($db, $b)['section'] === 'Whole System', 'section not set by add');
+        throws(fn() => add_card($db, 'C', 'Gamma', 'claude', null, 'Loans'), 'section on a project with none');
+        ok(count(list_cards($db)) === 2, 'card written with a bad section');
+    },
+    'edit_card_project_change_clears_section' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user', null, 'Loans');
+        edit_card($db, $id, 'A2', 'Alpha', 'user');
+        ok(get_card($db, $id)['section'] === 'Loans', 'title edit cleared the section');
+        edit_card($db, $id, 'A2', 'Beta', 'user');
+        $c = get_card($db, $id);
+        ok($c['project'] === 'Beta' && $c['section'] === null && $c['section_id'] === null, json_encode($c));
+    },
+    'report_cards_grouping' => function (PDO $db) {
+        $pid = project_id($db, 'Gamma');
+        $db->prepare("INSERT INTO sections (project_id, name, position) VALUES (?, 'Sec2', 2), (?, 'Sec1', 1)")->execute([$pid, $pid]);
+        $db->prepare("UPDATE projects SET site_name = 'Gamma Site' WHERE id = ?")->execute([$pid]);
+        try {
+            $card = function (string $title, string $col, ?string $section, ?string $liveAt = null) use ($db) {
+                $id = add_card($db, $title, 'Gamma', 'user', null, $section);
+                move_card($db, $id, $col, 'user');
+                if ($liveAt !== null) {
+                    $db->prepare('UPDATE cards SET live_at = ? WHERE id = ?')->execute([$liveAt, $id]);
+                }
+                return $id;
+            };
+            $done = $card('Done in range', 'live', 'Sec2', '2026-11-14');
+            add_note($db, $done, 'first', 'user');
+            add_note($db, $done, 'second', 'claude');
+            $card('Done before', 'live', 'Sec2', '2026-10-31');
+            $card('Building', 'building', 'Sec1');
+            $card('Todo', 'todo', 'Sec1');
+            $card('Planning', 'planning', 'Sec1');
+            $card('Review', 'review', null);
+            add_card($db, 'Other project', 'Alpha', 'user');
+            $r = report_cards($db, 'gamma', '2026-11-01', '2026-11-14');
+            ok($r['site_name'] === 'Gamma Site' && $r['project'] === 'Gamma' && $r['from'] === '2026-11-01' && $r['to'] === '2026-11-14',
+                json_encode($r));
+            $s = $r['sections'];
+            ok(array_column($s, 'name') === ['Sec1', 'Sec2', 'Other changes'], json_encode(array_column($s, 'name')));
+            ok(count($s[0]['underway']) === 1 && count($s[0]['done']) === 0 && $s[0]['underway'][0]['title'] === 'Building', json_encode($s[0]));
+            ok(count($s[1]['done']) === 1 && count($s[1]['underway']) === 0, json_encode($s[1]));
+            $d = $s[1]['done'][0];
+            ok($d === ['id' => $done, 'title' => 'Done in range', 'col' => 'live', 'live_at' => '2026-11-14', 'notes' => ['first', 'second']],
+                json_encode($d));
+            ok(array_column($s[2]['underway'], 'title') === ['Review'] && $s[2]['done'] === [], json_encode($s[2]));
+            // Underway cards count whatever the dates; an old range drops only the Done ones.
+            ok(array_column(report_cards($db, 'Gamma', '2026-01-01', '2026-01-02')['sections'], 'name') === ['Sec1', 'Other changes'],
+                'old range kept Done cards');
+        } finally {
+            $db->exec('DELETE FROM cards');
+            $db->prepare('DELETE FROM sections WHERE project_id = ?')->execute([$pid]);
+            $db->prepare('UPDATE projects SET site_name = NULL WHERE id = ?')->execute([$pid]);
+        }
+    },
+    'report_cards_bad_dates' => function (PDO $db) {
+        throws(fn() => report_cards($db, 'Alpha', '2026-11-10', '2026-11-01'), 'from after to');
+        throws(fn() => report_cards($db, 'Alpha', 'abc', '2026-11-01'), 'from abc');
+        throws(fn() => report_cards($db, 'Alpha', '2026-11-01', '2026-02-30'), 'no such day');
+        throws(fn() => report_cards($db, 'Nope', '2026-11-01', '2026-11-02'), 'unknown project');
+        ok(report_cards($db, 'Alpha', '2026-11-01', '2026-11-01')['sections'] === [], 'one-day range failed');
+    },
     'board_version_tracks_newest_file' => function (PDO $db) {
         $f = dirname(__DIR__) . '/app.js';
         $old = filemtime($f);

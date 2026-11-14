@@ -1,7 +1,8 @@
 <?php
 // JSON API for the web board.
-// GET: a=list[&project=Name] (first moves cards named in new verified DEPLOYMENTS.md entries to Live), a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown).
-// POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project), a=delete (id), a=note (id, body),
+// GET: a=list[&project=Name] (first moves cards named in new verified DEPLOYMENTS.md entries to Live), a=card&id=N (card + notes), a=events[&after=N] (50 newest; with after, up to 50 newer than event N, oldest first), a=plan&id=N (markdown),
+//      a=report_preview&project=P&from=YYYY-MM-DD&to=YYYY-MM-DD (counts of done, underway and no-section cards).
+// POST: a=add (title, project), a=move (id, col, position), a=edit (id, title, project), a=delete (id), a=note (id, body), a=section (id, section; blank clears),
 //       a=start_db (launches MySQL if it is not running; works without a database).
 // Requests: GET a=requests (requests + earlier requesters); POST a=request_add (body, requester, project, kind),
 //       a=request_card (id, title), a=request_delete (id).
@@ -9,8 +10,8 @@
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
-const GET_ACTIONS = ['list', 'card', 'events', 'plan', 'requests'];
-const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note', 'start_db', 'request_add', 'request_card', 'request_delete'];
+const GET_ACTIONS = ['list', 'card', 'events', 'plan', 'requests', 'report_preview'];
+const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note', 'section', 'start_db', 'request_add', 'request_card', 'request_delete'];
 
 function out(array $data, int $code = 200): never
 {
@@ -75,7 +76,8 @@ try {
             $project = $_GET['project'] ?? '';
             out([
                 'cards' => list_cards($db, $project === '' ? null : $project),
-                'projects' => $db->query('SELECT name, color FROM projects ORDER BY id')->fetchAll(),
+                'projects' => array_map(fn($p) => $p + ['sections' => array_column(list_sections($db, $p['name']), 'name')],
+                    $db->query('SELECT name, color, folder, site_name FROM projects ORDER BY id')->fetchAll()),
                 'columns' => COLUMNS,
                 'version' => board_version(),
             ]);
@@ -91,10 +93,19 @@ try {
             }
             out(['markdown' => file_get_contents(check_plan_path($card['plan_path'], $card['folder']))]);
         case 'add':
-            out(['id' => add_card($db, $_POST['title'] ?? '', $_POST['project'] ?? '', 'user')]);
+            out(['id' => add_card($db, $_POST['title'] ?? '', $_POST['project'] ?? '', 'user', null, $_POST['section'] ?? null)]);
         case 'edit':
             edit_card($db, int_param('id'), $_POST['title'] ?? '', $_POST['project'] ?? '', 'user');
             out(['ok' => true]);
+        case 'section':
+            set_section($db, int_param('id'), $_POST['section'] ?? '', 'user');
+            out(['ok' => true]);
+        case 'report_preview':
+            $r = report_cards($db, $_GET['project'] ?? '', $_GET['from'] ?? '', $_GET['to'] ?? '');
+            $count = fn(array $groups, string $k) => array_sum(array_map(fn($g) => count($g[$k]), $groups));
+            $other = array_filter($r['sections'], fn($g) => $g['name'] === 'Other changes'); // report_cards' group for cards with no section
+            out(['done' => $count($r['sections'], 'done'), 'underway' => $count($r['sections'], 'underway'),
+                'no_section' => $count($other, 'done') + $count($other, 'underway')]);
         case 'delete':
             delete_card($db, int_param('id'), 'user');
             out(['ok' => true]);

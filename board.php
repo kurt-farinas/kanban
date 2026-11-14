@@ -1,11 +1,12 @@
 <?php
-// CLI for Claude: php board.php add|move|block|unblock|find|status|note|notes|plan|sync ...
+// CLI for Claude: php board.php add|move|block|unblock|find|status|note|notes|plan|section|sections|report|sync ...
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
-const USAGE = 'Usage: php board.php add "<title>" <project> | move <id> <column> [position]'
+const USAGE = 'Usage: php board.php add "<title>" <project> [section] | move <id> <column> [position]'
     . ' | block <id> "<reason>" | unblock <id> | find "<text>"'
-    . ' | status <id> "<text>" | note <id> "<text>" | notes <id> | plan <id> <path> | sync';
+    . ' | status <id> "<text>" | note <id> "<text>" | notes <id> | plan <id> <path>'
+    . ' | section <id> "<name>"|none | sections <project> | report <project> <from> <to> | sync';
 
 function int_arg(?string $s): int
 {
@@ -32,7 +33,7 @@ try {
     switch ($cmd) {
         case 'add':
             need($a, $b);
-            echo '#', add_card($db, $a, $b, 'claude'), "\n";
+            echo '#', add_card($db, $a, $b, 'claude', null, $c), "\n";
             break;
         case 'move':
             need($a, $b);
@@ -69,6 +70,20 @@ try {
         case 'plan':
             need($a, $b);
             set_plan($db, int_arg($a), $b, 'claude');
+            break;
+        case 'section':
+            need($a, $b);
+            set_section($db, int_arg($a), strtolower(trim($b)) === 'none' ? null : $b, 'claude');
+            break;
+        case 'sections':
+            need($a);
+            foreach (list_sections($db, $a) as $s) {
+                echo $s['name'], "\n";
+            }
+            break;
+        case 'report':
+            need($a, $b, $c);
+            echo json_encode(report_cards($db, $a, $b, $c), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), "\n";
             break;
         case 'sync':
             echo sync_deployments($db), "\n";

@@ -28,6 +28,7 @@ header('Cache-Control: no-cache');
         <label>Project
             <select id="filter"><option value="">All projects</option></select>
         </label>
+        <button type="button" id="report-open" class="bar-btn" data-needs-db>Make report</button>
         <button type="button" id="requests-toggle" class="bar-btn" aria-expanded="false" aria-controls="requests">Requests</button>
         <button type="button" id="activity-toggle" class="bar-btn" aria-expanded="false" aria-controls="activity">Activity</button>
         <button type="button" id="theme" class="bar-btn" aria-label="Switch theme">Light</button>
@@ -66,6 +67,7 @@ header('Cache-Control: no-cache');
                         <input name="title" maxlength="200" placeholder="Card title" aria-label="Card title">
                         <p class="field-error" hidden>Enter a title.</p>
                         <select name="project" aria-label="Project"></select>
+                        <select name="section" aria-label="Section" hidden></select>
                         <button type="submit" data-needs-db>Add</button>
                     </form>
                 <?php endif ?>
@@ -83,6 +85,7 @@ header('Cache-Control: no-cache');
             <p class="field-error" hidden>Enter a title.</p>
             <div class="row">
                 <select name="project" aria-label="Project"></select>
+                <select name="section" aria-label="Section" hidden></select>
                 <button type="submit" class="primary" data-needs-db>Save</button>
             </div>
         </form>
@@ -112,6 +115,22 @@ header('Cache-Control: no-cache');
             </div>
         </div>
     </div>
+    <dialog id="report" class="confirm report" aria-labelledby="report-title">
+        <form class="stack" novalidate>
+            <h2 id="report-title">Make report</h2>
+            <label class="field">Website <select name="project"></select></label>
+            <div class="row">
+                <label class="field">From <input type="date" name="from" required></label>
+                <label class="field">To <input type="date" name="to" required></label>
+            </div>
+            <p class="report-preview" role="status"></p>
+            <p class="report-warn" hidden></p>
+            <div class="confirm-actions">
+                <button type="button" class="secondary" id="report-cancel">Cancel</button>
+                <button type="submit" class="primary" disabled>Make report</button>
+            </div>
+        </form>
+    </dialog>
     <div id="toasts" class="toasts"></div>
     <script src="<?= $v('app.js') ?>"></script>
     <script>
