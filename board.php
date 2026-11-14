@@ -36,12 +36,27 @@ if ($cmd === 'backup') {
     try {
         $path = backup_db(backup_dir(), $today);
         echo $path === null ? "Today's backup already exists.\n" : "Saved $path\n";
-        exit(0);
     } catch (Throwable $e) {
         notify('Kanban backup failed', $e->getMessage());
         fwrite(STDERR, $e->getMessage() . "\n");
         exit(1);
     }
+    $copy = backup_copy_dir();
+    $file = backup_dir() . DIRECTORY_SEPARATOR . "kanban-$today.sql";
+    if ($copy === null) {
+        echo "No copy folder (OneDrive not found, BACKUP_COPY_DIR not set); not copied.\n";
+    } elseif (is_file($copy . DIRECTORY_SEPARATOR . "kanban-$today.sql")) {
+        echo "Today's copy already exists in $copy.\n";
+    } else {
+        try {
+            echo 'Copied to ', copy_backup($file, $copy), "\n";
+        } catch (Throwable $e) {
+            notify('Kanban backup copy failed', $e->getMessage());
+            fwrite(STDERR, $e->getMessage() . "\n");
+            exit(1);
+        }
+    }
+    exit(0);
 }
 
 try {

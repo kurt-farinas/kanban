@@ -1,5 +1,6 @@
 <?php
 // Optional config.local.php (git-ignored) returns an array overriding any of: host, user, pass, db, timezone.
+// It may also define('BACKUP_COPY_DIR', '<folder>') before returning, to send the second backup copy somewhere other than OneDrive.
 function db_config(): array
 {
     static $c = null;

@@ -105,7 +105,18 @@ body.offline .card-actions { display: none; }
     cursor: pointer;
 }
 
-#report-open { margin-left: auto; }
+#report-open, #backup-warn { margin-left: auto; }
+#backup-warn:not([hidden]) + #report-open { margin-left: 0; }
+
+/* Stale or uncopied backup: a small amber chip, same shape as the bar buttons. */
+.bar-warn {
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--warn);
+    background: var(--warn-soft);
+    border: 1px solid var(--warn);
+    border-radius: 8px;
+}
 
 .bar-btn:hover, .bar-btn[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
 

@@ -1014,19 +1014,64 @@ function backup_db(string $dir, string $date, int $keep = 7, ?string $dbName = n
         throw new RuntimeException('mysqldump failed: ' . trim($err ?: "exit code $code"));
     }
     rename($tmp, $path);
+    prune_backups($dir, $keep);
+    return $path;
+}
+
+function prune_backups(string $dir, int $keep): void
+{
     $all = glob("$dir/kanban-????-??-??.sql");
     rsort($all); // newest first: the names sort by date
     foreach (array_slice($all, $keep) as $old) {
         unlink($old);
     }
-    return $path;
+}
+
+// Second copy of each backup (OneDrive by default, so it survives a dead disk). BACKUP_COPY_DIR in config.local.php overrides.
+function backup_copy_dir(): ?string
+{
+    db_config(); // loads config.local.php, which may define BACKUP_COPY_DIR
+    if (defined('BACKUP_COPY_DIR')) {
+        return BACKUP_COPY_DIR;
+    }
+    $one = getenv('OneDrive');
+    return $one !== false && $one !== '' && is_dir($one) ? $one . DIRECTORY_SEPARATOR . 'KanbanBackups' : null;
+}
+
+// Copies $file into $dir via a .tmp (a half-copied file never looks complete), keeping the newest $keep there.
+function copy_backup(string $file, string $dir, int $keep = 7): string
+{
+    if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) {
+        throw new RuntimeException("Can't create the backup copy folder $dir.");
+    }
+    $dest = $dir . DIRECTORY_SEPARATOR . basename($file);
+    if (!copy($file, "$dest.tmp") || !rename("$dest.tmp", $dest)) {
+        @unlink("$dest.tmp");
+        throw new RuntimeException("Could not copy $file to $dir.");
+    }
+    prune_backups($dir, $keep);
+    return $dest;
+}
+
+// For the board's warning chip: the newest local backup's date, and whether it reached the copy folder (null: no copy folder).
+function backup_status(string $dir, ?string $copyDir): array
+{
+    $all = glob("$dir/kanban-????-??-??.sql") ?: [];
+    rsort($all);
+    $name = $all ? basename($all[0]) : null;
+    return [
+        'date' => $name === null ? null : substr($name, 7, 10),
+        'copied' => $copyDir === null ? null : $name !== null && is_file($copyDir . DIRECTORY_SEPARATOR . $name),
+    ];
 }
 
 // Starts today's backup in the background when it doesn't exist yet (called from the Stop hook; never waits).
 function backup_if_due(PDO $db): bool
 {
     $today = $db->query('SELECT CURDATE()')->fetchColumn();
-    if (is_file(backup_dir() . "/kanban-$today.sql") || getenv('KANBAN_NO_NOTIFY') !== false) {
+    $copy = backup_copy_dir();
+    $done = is_file(backup_dir() . "/kanban-$today.sql") && ($copy === null || is_file("$copy/kanban-$today.sql"));
+    if ($done || getenv('KANBAN_NO_NOTIFY') !== false) {
         return false;
     }
     pclose(popen('start "" /B wscript.exe ' . escapeshellarg(__DIR__ . '/autostart/backup.vbs'), 'r'));

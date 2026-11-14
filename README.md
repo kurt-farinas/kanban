@@ -80,6 +80,8 @@ Dropping a card into Planning, Building, Review or Live opens
 schtasks /Create /SC DAILY /ST 17:00 /TN "Kanban backup" /TR "wscript.exe \"C:\xampp\htdocs\kanban\autostart\backup.vbs\""
 ``` When MySQL is off it skips quietly; when a dump fails you get a toast.
 
+Each day's backup is also copied to `%OneDrive%\KanbanBackups` (newest 7 kept there too), so a dead disk doesn't take the backups with it. To use another folder, add `define('BACKUP_COPY_DIR', 'D:\\Backups\\Kanban');` to `config.local.php` before its `return`. With no OneDrive and no `BACKUP_COPY_DIR`, nothing is copied. A failed copy shows a toast. The board's top bar shows a warning when there is no backup, the newest is 2 or more days old, or today's backup was not copied.
+
 Restore a backup (this replaces the board's current data):
 
 ```

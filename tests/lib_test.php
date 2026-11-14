@@ -980,6 +980,52 @@ $tests = [
             rmdir($dir);
         }
     },
+    'backup_copy_prunes_to_keep' => function (PDO $db) {
+        $src = sys_get_temp_dir() . '/kanban_copy_src_' . getmypid();
+        $dir = sys_get_temp_dir() . '/kanban_copy_dst_' . getmypid(); // copy_backup creates it
+        @mkdir($src);
+        file_put_contents("$src/kanban-2026-11-09.sql", 'X');
+        try {
+            mkdir($dir);
+            for ($i = 1; $i <= 8; $i++) {
+                file_put_contents("$dir/kanban-2026-11-0$i.sql", 'old');
+            }
+            $dest = copy_backup("$src/kanban-2026-11-09.sql", $dir, 7);
+            ok(str_ends_with($dest, 'kanban-2026-11-09.sql'), "dest: $dest");
+            $left = array_map('basename', glob("$dir/*"));
+            sort($left);
+            ok(count($left) === 7, implode(',', $left));
+            ok($left[0] === 'kanban-2026-11-03.sql' && end($left) === 'kanban-2026-11-09.sql', implode(',', $left));
+            ok(file_get_contents("$dir/kanban-2026-11-09.sql") === 'X', 'copied content');
+            ok(glob("$dir/*.tmp") === [], 'temp file left behind');
+        } finally {
+            foreach ([$src, $dir] as $d) {
+                array_map('unlink', glob("$d/*") ?: []);
+                @rmdir($d);
+            }
+        }
+    },
+    'backup_status_reads_latest_and_copy' => function (PDO $db) {
+        $local = sys_get_temp_dir() . '/kanban_status_local_' . getmypid();
+        $copy = sys_get_temp_dir() . '/kanban_status_copy_' . getmypid();
+        @mkdir($local);
+        @mkdir($copy);
+        try {
+            ok(backup_status($local, $copy) === ['date' => null, 'copied' => false], 'empty: ' . json_encode(backup_status($local, $copy)));
+            file_put_contents("$local/kanban-2026-11-12.sql", 'a');
+            file_put_contents("$local/kanban-2026-11-13.sql", 'b');
+            file_put_contents("$copy/kanban-2026-11-12.sql", 'a');
+            $s = backup_status($local, $copy);
+            ok($s === ['date' => '2026-11-13', 'copied' => false], json_encode($s));
+            $s = backup_status($local, null);
+            ok($s === ['date' => '2026-11-13', 'copied' => null], json_encode($s));
+        } finally {
+            foreach ([$local, $copy] as $d) {
+                array_map('unlink', glob("$d/*") ?: []);
+                @rmdir($d);
+            }
+        }
+    },
 ];
 
 $server = db('');

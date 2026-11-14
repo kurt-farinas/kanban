@@ -102,6 +102,7 @@ try {
                     $db->query('SELECT name, color, folder, site_name FROM projects ORDER BY id')->fetchAll()),
                 'columns' => COLUMNS,
                 'version' => board_version(),
+                'backup' => backup_status(backup_dir(), backup_copy_dir()),
             ]);
         case 'card':
             $id = int_param('id');

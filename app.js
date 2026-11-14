@@ -647,6 +647,21 @@ function render(data) {
     paint();
     noticeBlocks(data.cards);
     noticeWorking(data.cards);
+    showBackup(data.backup);
+}
+
+// Warns when the newest backup is 2+ days old (by this browser's date) or never reached the copy folder.
+function showBackup(b) {
+    const warn = document.getElementById('backup-warn');
+    if (!b) return;
+    const d = new Date();
+    const today = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+    const days = b.date ? Math.round((today - Date.parse(b.date)) / 86400000) : null; // 'YYYY-MM-DD' parses as UTC
+    const text = b.date === null ? 'No backup yet'
+        : days >= 2 ? `Last backup ${days} days ago`
+        : b.copied === false ? 'Backup not copied to OneDrive' : '';
+    warn.textContent = text;
+    warn.hidden = text === '';
 }
 
 // "Claude started" toast when a card's working dot appears since the last render. The hook clears the dot
