@@ -949,6 +949,21 @@ $tests = [
             throws(fn() => edit_project($db, 9999, 'X', $dir, 'pink', null, 'user'), 'unknown project');
         });
     },
+    'archived_project_refuses_new_cards' => function (PDO $db) {
+        $alpha = project_row($db, 'Alpha')['id'];
+        $card = add_card($db, 'Old work', 'Alpha', 'user');
+        set_project_archived($db, $alpha, true, 'user');
+        try {
+            throws(fn() => add_card($db, 'New work', 'Alpha', 'user'), 'card on archived project');
+            ok(in_array($card, array_column(list_cards($db), 'id')), 'existing card kept');
+            ok(project_row($db, 'Alpha')['archived'] === true, 'archived flag');
+            throws(fn() => set_project_archived($db, 9999, true, 'user'), 'unknown project');
+        } finally {
+            set_project_archived($db, $alpha, false, 'user');
+        }
+        ok(project_row($db, 'Alpha')['archived'] === false, 'un-archived flag');
+        ok(add_card($db, 'New work', 'Alpha', 'user') > 0, 'add after un-archive');
+    },
     'save_sections_renames_reorders_adds_and_removes' => function (PDO $db) {
         $dir = dirname(__DIR__);
         with_new_projects($db, function () use ($db, $dir) {

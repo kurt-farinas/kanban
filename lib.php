@@ -132,6 +132,9 @@ function add_card(PDO $db, string $title, string $project, string $by, ?int $req
     check_by($by);
     check_title($title);
     $pid = project_id($db, $project);
+    if ($db->query("SELECT archived FROM projects WHERE id = $pid")->fetchColumn()) {
+        throw new InvalidArgumentException("Project '$project' is archived. Un-archive it in Projects first.");
+    }
     $sid = section_id($db, $pid, $project, $section)['id'];
     return in_tx($db, function () use ($db, $pid, $title, $by, $project, $requestId, $sid) {
         $st = $db->prepare("INSERT INTO cards (project_id, title, col, position, updated_by, request_id, section_id)
@@ -217,7 +220,7 @@ const PROJECT_COLORS = ['purple', 'teal', 'coral', 'pink', 'blue', 'green', 'gol
 // Every project in id order with its card count and its sections (each with its card count), in report order.
 function list_projects(PDO $db): array
 {
-    $projects = $db->query('SELECT p.id, p.name, p.folder, p.color, p.site_name,
+    $projects = $db->query('SELECT p.id, p.name, p.folder, p.color, p.site_name, p.archived,
             (SELECT COUNT(*) FROM cards c WHERE c.project_id = p.id) AS card_count
         FROM projects p ORDER BY p.id')->fetchAll();
     $st = $db->prepare('SELECT s.id, s.name, s.position, (SELECT COUNT(*) FROM cards c WHERE c.section_id = s.id) AS card_count
@@ -228,6 +231,7 @@ function list_projects(PDO $db): array
             'card_count' => (int) $s['card_count']], $st->fetchAll());
         $p['id'] = (int) $p['id'];
         $p['card_count'] = (int) $p['card_count'];
+        $p['archived'] = (bool) $p['archived'];
     }
     return $projects;
 }
@@ -300,6 +304,17 @@ function edit_project(PDO $db, int $id, string $name, string $folder, string $co
             ->execute([$name, $folder, $color, $siteName, $id]);
         log_request_event($db, $name, $by, 'project', $old['name'] === $name ? "edited $name" : "renamed {$old['name']} to $name");
     });
+}
+
+// Archiving only hides the project from new-card pickers and reports; its cards stay as they are.
+function set_project_archived(PDO $db, int $id, bool $archived, string $by): void
+{
+    check_by($by);
+    $st = $db->prepare('SELECT name FROM projects WHERE id = ?');
+    $st->execute([$id]);
+    $name = $st->fetchColumn() ?: throw new InvalidArgumentException("No project #$id.");
+    $db->prepare('UPDATE projects SET archived = ? WHERE id = ?')->execute([(int) $archived, $id]);
+    log_request_event($db, $name, $by, 'project', ($archived ? 'archived ' : 'un-archived ') . $name);
 }
 
 // $sections: the whole ordered list, each ['id' => ?int, 'name' => string]. An id renames, no id adds,

@@ -8,7 +8,7 @@
 //       a=request_card (id, title), a=request_delete (id).
 // Projects: GET a=projects (each with folder, colour, report name, card count and sections with ids and card counts);
 //       POST a=project_add (name, folder, color, site_name, sections), a=project_edit (id, name, folder, color, site_name),
-//       a=sections_save (id, sections). sections is a JSON list of {id: int|null, name}, in report order.
+//       a=project_archive (id, archived 0/1), a=sections_save (id, sections). sections is a JSON list of {id: int|null, name}, in report order.
 // Bad input, including a name taken at the same moment by another save, answers 400 with the message.
 // A database that can't be reached answers 503 with db_down: true.
 require __DIR__ . '/config.php';
@@ -16,7 +16,7 @@ require __DIR__ . '/lib.php';
 
 const GET_ACTIONS = ['list', 'card', 'events', 'plan', 'chat', 'requests', 'report_preview', 'projects'];
 const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note', 'section', 'start_db', 'request_add', 'request_card', 'request_delete',
-    'project_add', 'project_edit', 'sections_save'];
+    'project_add', 'project_edit', 'project_archive', 'sections_save'];
 
 function out(array $data, int $code = 200): never
 {
@@ -98,8 +98,9 @@ try {
             $project = $_GET['project'] ?? '';
             out([
                 'cards' => list_cards($db, $project === '' ? null : $project),
-                'projects' => array_map(fn($p) => $p + ['sections' => array_column(list_sections($db, $p['name']), 'name')],
-                    $db->query('SELECT name, color, folder, site_name FROM projects ORDER BY id')->fetchAll()),
+                'projects' => array_map(fn($p) => ['archived' => (bool) $p['archived']] + $p
+                    + ['sections' => array_column(list_sections($db, $p['name']), 'name')],
+                    $db->query('SELECT name, color, folder, site_name, archived FROM projects ORDER BY id')->fetchAll()),
                 'columns' => COLUMNS,
                 'version' => board_version(),
                 'backup' => backup_status(backup_dir(), backup_copy_dir()),
@@ -158,6 +159,9 @@ try {
         case 'project_edit':
             edit_project($db, int_param('id'), $_POST['name'] ?? '', $_POST['folder'] ?? '', $_POST['color'] ?? '',
                 $_POST['site_name'] ?? null, 'user');
+            out(['ok' => true]);
+        case 'project_archive':
+            set_project_archived($db, int_param('id'), (bool) int_param('archived'), 'user');
             out(['ok' => true]);
         case 'sections_save':
             save_sections($db, int_param('id'), sections_param(true), 'user');

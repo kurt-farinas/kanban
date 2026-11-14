@@ -119,7 +119,8 @@ try {
             break;
         case 'projects':
             foreach (list_projects($db) as $p) {
-                echo "{$p['name']} | {$p['folder']} | sections: ", implode(', ', array_column($p['sections'], 'name')) ?: 'none', "\n";
+                echo "{$p['name']} | {$p['folder']} | sections: ", implode(', ', array_column($p['sections'], 'name')) ?: 'none',
+                    $p['archived'] ? ' | archived' : '', "\n";
             }
             break;
         case 'report':

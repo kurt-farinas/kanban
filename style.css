@@ -673,6 +673,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 
 /* Section pill: neutral outline, so it never reads as a project color. */
 .section-pill { padding: 0 7px; color: var(--text); background: none; border: 1px solid var(--border); }
+.archived-tag { padding: 0 7px; color: var(--muted); background: none; border: 1px dashed var(--border); }
 .card.compact .section-pill { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; }
 
 /* Make report dialog: native <dialog> wearing the confirm popup look; the form carries the padding so a click on the backdrop is the only click on the dialog itself. */

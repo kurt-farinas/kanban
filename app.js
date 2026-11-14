@@ -373,20 +373,27 @@ function md(src) {
 
 // --- Board ---
 
-let filledNames = null; // project names the dropdowns hold; unchanged = no rebuild, so an open dropdown stays open
+let filledNames = []; // project names the dropdowns hold, in id order
+let filledKey = null; // names and archived flags; unchanged = no rebuild, so an open dropdown stays open
 
-// Rebuilds every project dropdown, keeping each one's choice by position: projects come in id order and are never
-// deleted, so a renamed project keeps its place and stays chosen under its new name.
+// Rebuilds every project dropdown, keeping each one's choice by its position in the full list: projects come in
+// id order and are never deleted, so a renamed project keeps its place and stays chosen under its new name.
+// Archived projects are left out of the new-card pickers (add and request forms) only.
 function fillProjects(projects) {
     const names = projects.map(p => p.name);
-    if (filledNames === names.join('\n')) return;
-    filledNames = names.join('\n');
+    const key = projects.map(p => p.name + (p.archived ? '\t' : '')).join('\n');
+    if (filledKey === key) return;
+    filledKey = key;
+    const open = projects.filter(p => !p.archived).map(p => p.name);
     const keepFilled = editForm.elements.project.value === filledProject; // a rename must not look like Claude's change
     for (const select of [filter, projectSelect, editForm.elements.project, requestForm.elements.project]) {
-        const i = select.selectedIndex;
-        select.replaceChildren(...(select === filter ? [new Option('All projects', '')] : []), ...names.map(n => new Option(n, n)));
-        select.selectedIndex = Math.max(i, 0);
+        const was = names[filledNames.indexOf(select.value)] ?? select.value;
+        const list = select === projectSelect || select === requestForm.elements.project ? open : names;
+        select.replaceChildren(...(select === filter ? [new Option('All projects', '')] : []), ...list.map(n => new Option(n, n)));
+        select.value = was;
+        if (select.selectedIndex < 0) select.selectedIndex = 0;
     }
+    filledNames = names;
     if (keepFilled) filledProject = editForm.elements.project.value;
     fillSections(addForm.elements.section, projectSelect.value, addForm.elements.section.value);
 }
@@ -516,6 +523,7 @@ function cardEl(c) {
     const pill = el('span', 'pill', c.project);
     pill.dataset.color = c.color;
     tags.append(pill);
+    if (projectInfo.get(c.project)?.archived) tags.append(el('span', 'pill archived-tag', 'archived'));
     if (c.section) tags.append(el('span', 'pill section-pill', c.section));
     if (c.request_kind) {
         const r = el('span', 'pill kind-tag', `${KINDS[c.request_kind]} · ${c.request_requester}`);
@@ -1656,7 +1664,7 @@ async function preview(my) {
 }
 
 document.getElementById('report-open').addEventListener('click', () => {
-    const sites = [...projectInfo.values()].filter(p => p.sections.length);
+    const sites = [...projectInfo.values()].filter(p => p.sections.length && !p.archived);
     if (!sites.length) {
         toast('No website has sections yet.', { kind: 'error' });
         return;
@@ -1737,7 +1745,23 @@ function showProjectList() {
             }
             showProjectForm(projectRows.find(x => x.id === p.id));
         });
-        li.append(dot, el('span', 'project-name', p.name), el('span', 'project-count', plural(p.card_count, 'card')), edit);
+        const archive = el('button', 'secondary', p.archived ? 'Un-archive' : 'Archive');
+        archive.type = 'button';
+        archive.setAttribute('aria-label', `${p.archived ? 'Un-archive' : 'Archive'} ${p.name}`);
+        archive.addEventListener('click', async () => {
+            try {
+                await busy(archive, api({ a: 'project_archive', id: p.id, archived: p.archived ? 0 : 1 }, true));
+                toast(`${p.name} ${p.archived ? 'un-archived' : 'archived'}`);
+                load();
+                await loadProjects();
+                showProjectList();
+            } catch (err) {
+                toastError(err);
+            }
+        });
+        const name = el('span', 'project-name', p.name);
+        if (p.archived) name.append(' ', el('span', 'pill archived-tag', 'archived'));
+        li.append(dot, name, el('span', 'project-count', plural(p.card_count, 'card')), archive, edit);
         return li;
     }));
 }

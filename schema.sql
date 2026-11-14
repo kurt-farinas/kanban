@@ -3,7 +3,8 @@ CREATE TABLE projects (
     name VARCHAR(50) NOT NULL UNIQUE,
     folder VARCHAR(255) NOT NULL,
     color VARCHAR(20) NOT NULL,
-    site_name VARCHAR(100) NULL -- the name staff see, for report titles
+    site_name VARCHAR(100) NULL, -- the name staff see, for report titles
+    archived TINYINT NOT NULL DEFAULT 0 -- 1: no new cards, left out of reports; its cards stay
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- A website's parts, in report order; a card can carry one section of its own project.
