@@ -474,7 +474,9 @@ textarea { resize: vertical; }
 
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 
-.toast-claude { background: var(--col); border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent), 0 8px 24px rgba(0, 0, 0, 0.3); }
+.toast-claude { background: var(--col); border-color: var(--accent); }
+
+.toast-mark { color: var(--accent); }
 
 .toast-error { color: #fff; background: var(--danger); border-color: var(--danger); }
 

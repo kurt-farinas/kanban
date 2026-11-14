@@ -24,6 +24,9 @@ let openId = null; // card shown in the details panel
 let openCard = null;
 let blockedIds = null; // blocked card ids at the last poll; null = record silently
 let unseenBlocks = 0;
+let workingIds = null; // card ids with the working dot at the last render; null = record silently
+let lastEventId = null; // newest event already seen; null = not fetched yet, so old events never toast
+let eventsPolling = false;
 const pendingDeletes = new Set(); // card ids deleted in the UI whose request waits behind an Undo toast
 let opening = 0; // Claude links waiting behind an Undo toast
 // Columns whose move opens a Claude session (lib.php claude_link), with the hint shown while dragging over them.
@@ -76,6 +79,11 @@ const TOAST_MAX = 3;
 function toast(text, { kind = 'user', action, ms } = {}) {
     const t = el('div', `toast toast-${kind}`);
     t.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    if (kind === 'claude') {
+        const mark = el('span', 'toast-mark', '✻');
+        mark.setAttribute('aria-hidden', 'true');
+        t.append(mark);
+    }
     t.append(el('span', 'toast-text', text));
     let timer = null;
     const close = () => {
@@ -349,6 +357,18 @@ function render(data) {
         section.querySelector('.count').textContent = mine.length;
     }
     noticeBlocks(data.cards);
+    noticeWorking(data.cards);
+}
+
+// "Claude started" toast when a card's working dot appears since the last render.
+function noticeWorking(list) {
+    const now = new Set(list.filter(isWorking).map(c => c.id));
+    for (const c of list) {
+        if (workingIds && now.has(c.id) && !workingIds.has(c.id)) {
+            toast(`Claude started on #${c.id}${c.status ? `: ${c.status}` : ''}`, { kind: 'claude' });
+        }
+    }
+    workingIds = now;
 }
 
 // --- Blocked alerts: tab title + beep for cards blocked since the last poll ---
@@ -672,6 +692,7 @@ for (const section of document.querySelectorAll('.column')) {
 
 filter.addEventListener('change', () => {
     blockedIds = null; // other cards come into view; they are not new blocks
+    workingIds = null;
     load();
 });
 
@@ -919,6 +940,33 @@ async function loadEvents() {
     }
 }
 
+// Claude's writes since the last poll, one toast per card. The first call only records where the log stands.
+async function pollClaude() {
+    if (eventsPolling) return;
+    eventsPolling = true;
+    try {
+        if (lastEventId === null) {
+            const { events } = await api({ a: 'events' });
+            lastEventId = events.length ? events[0].id : 0;
+            return;
+        }
+        const { events } = await api({ a: 'events', after: lastEventId });
+        if (!events.length) return;
+        lastEventId = events[events.length - 1].id;
+        const byCard = Map.groupBy(events.filter(e => e.author === 'claude'), e => e.card_id);
+        for (const [id, list] of byCard) {
+            const e = list[0];
+            toast(list.length > 1 ? `Claude made ${list.length} changes on #${id}`
+                : e.action === 'blocked' ? `Claude needs you on #${id}: ${e.detail}`
+                : `Claude ${eventText(e)}`, { kind: 'claude' });
+        }
+    } catch (e) {
+        showError(e);
+    } finally {
+        eventsPolling = false;
+    }
+}
+
 function toggleActivity(open = activity.hidden) {
     activity.hidden = !open;
     activityToggle.setAttribute('aria-expanded', open);
@@ -933,7 +981,9 @@ function refresh() {
 }
 
 load();
+pollClaude();
 setInterval(() => {
+    pollClaude();
     if (dragging) return;
     refresh();
     if (openId !== null) showCard(false);
