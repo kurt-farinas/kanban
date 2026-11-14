@@ -595,17 +595,35 @@ function syncQuick() {
     try { localStorage.setItem(FILTERS_KEY, JSON.stringify([...quickOn])); } catch { /* private mode: in-memory only */ }
 }
 
+// Live cards that went live over 30 days ago stay hidden behind one button until it is clicked (this page only).
+let showOlderLive = false;
+
+function showOlderButton(n) {
+    const b = el('button', 'show-older', `Show ${n} older`);
+    b.type = 'button';
+    b.title = 'Live for more than 30 days';
+    b.addEventListener('click', () => {
+        showOlderLive = true;
+        paint();
+    });
+    return b;
+}
+
 function paint() {
     const words = searchWords();
     const active = words.length > 0 || quickOn.size > 0;
     const shown = [...cards.values()].filter(c => !pendingDeletes.has(String(c.id)));
     let visible = 0;
     const focusedId = document.activeElement?.closest?.('.card')?.dataset.id; // the re-render must not drop j/k focus
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+    const oldLive = c => !active && !showOlderLive && c.col === 'live' && c.live_at && c.live_at < cutoff.toLocaleDateString('en-CA');
     for (const section of document.querySelectorAll('.column')) {
         const mine = shown.filter(c => c.col === section.dataset.col);
-        const hits = active ? mine.filter(c => cardMatches(c, words)) : mine;
+        const hits = (active ? mine.filter(c => cardMatches(c, words)) : mine).filter(c => !oldLive(c));
         visible += hits.length;
-        section.querySelector('.cards').replaceChildren(...hits.map(cardEl));
+        const older = active ? 0 : mine.length - hits.length;
+        section.querySelector('.cards').replaceChildren(...hits.map(cardEl), ...(older ? [showOlderButton(older)] : []));
         section.querySelector('.count').textContent = active ? `${hits.length} / ${mine.length}` : mine.length;
     }
     board.classList.toggle('filtering', active);

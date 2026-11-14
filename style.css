@@ -288,7 +288,7 @@ select:focus, input:focus, textarea:focus, button:focus-visible, .card:focus-vis
 [data-theme="light"] .pill[data-color="slate"] { color: #2e3a4a; background: #e8ecf1; }
 .pill.blocked { color: #fff; background: var(--danger); cursor: help; }
 
-.add-open {
+.add-open, .show-older {
     padding: 7px 8px;
     text-align: left;
     color: var(--muted);
@@ -298,7 +298,7 @@ select:focus, input:focus, textarea:focus, button:focus-visible, .card:focus-vis
     cursor: pointer;
 }
 
-.add-open:hover { color: var(--accent); background: var(--accent-soft); }
+.add-open:hover, .show-older:hover { color: var(--accent); background: var(--accent-soft); }
 
 .add { display: flex; flex-direction: column; gap: 6px; }
 
