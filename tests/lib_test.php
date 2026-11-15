@@ -370,6 +370,12 @@ $tests = [
         $php = 'C:\xampp\php\php.exe C:\xampp\htdocs\kanban\board.php';
         ok(card_from_command("$php status 4 \"Fixing\"") === 4, 'status');
         ok(card_from_command("'$php' status '9' \"x\"") === 9, 'quoted');
+        // PowerShell chats keep the path in a variable (cards #59, #66 never linked).
+        ok(card_from_command("\$b='C:\\xampp\\htdocs\\kanban\\board.php'; & C:\\xampp\\php\\php.exe \$b move 66 building; & C:\\xampp\\php\\php.exe \$b status 66 \"x\"") === 66, 'variable path');
+        ok(card_from_command("\$b='C:\\xampp\\php\\php.exe'; \$k='C:\\xampp\\htdocs\\kanban\\board.php'; & \$b \$k status 59 \"x\"") === 59, 'two variables');
+        ok(card_from_command("K=/c/xampp/htdocs/kanban/board.php; php \"\${K}\" status 7 x") === 7, 'bash braces');
+        ok(card_from_command("$php move 5 x && git status 2") === null, 'git status');
+        ok(card_from_command("\$s=3; git \$s status 4") === null, 'variable without board.php');
         // Only status links a chat: tagging or moving other cards must not (a section run linked this chat to #33).
         ok(card_from_command("$php move 21 review") === null, 'move links');
         ok(card_from_command("$php note 9 x") === null, 'note links');

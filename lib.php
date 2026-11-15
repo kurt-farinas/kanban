@@ -1029,9 +1029,13 @@ function card_from_prompt(string $prompt): ?int
 }
 
 // Only "board.php status N ..." links the session to card N: other commands (move, note, section) often touch other cards.
+// The path may sit in a shell variable ($b status N, "${K}" status N) when the command also names board.php.
 function card_from_command(string $command): ?int
 {
-    return preg_match('/board\.php["\']?\s+status\s+["\']?(\d{1,9})\b/i', $command, $m) ? (int) $m[1] : null;
+    if (!preg_match('/board\.php/i', $command)) {
+        return null;
+    }
+    return preg_match('/(?:board\.php|\$\{?\w+\}?)["\']?\s+status\s+["\']?(\d{1,9})\b/i', $command, $m) ? (int) $m[1] : null;
 }
 
 // Links the session to the card and lights the card's dot; false if there is no such card.
