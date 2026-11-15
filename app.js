@@ -901,8 +901,9 @@ function openQuestion(c, col) {
     if (col === 'live') {
         return {
             title: `Deploy #${c.id} (${c.project}) to its live site?`,
-            body: "Claude follows that project's deploy rules: backup, log, then check the site.",
-            ok: 'Start deploy chat',
+            body: "Claude follows that project's deploy rules: backup, log, then check the site."
+                + (c.has_chat ? " This card's chat opens (a new one if that chat was archived)." : ''),
+            ok: c.has_chat ? 'Deploy in its chat' : 'Start deploy chat',
             danger: true,
         };
     }
@@ -956,7 +957,7 @@ function openSoon(c, res) {
             }
         }
         openLink(res.link);
-        if (copied) toast(`Opened #${c.id}'s chat. Message copied: press Ctrl+V, then Enter.`, { ms: 8000 });
+        if (copied) toast(`Opened #${c.id}'s chat "${res.chat}". Message copied: press Ctrl+V, then Enter.`, { ms: 8000 });
         else if (res.prompt) toast(`Opened #${c.id}'s chat. Copy this message into it: ${res.prompt}`, { kind: 'error' });
     }, OPEN_MS);
     close = toast(`Opening Claude for #${c.id}…`, {
