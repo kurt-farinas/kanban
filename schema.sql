@@ -83,7 +83,7 @@ CREATE TABLE chat_links (
     card_id INT NOT NULL,
     session_id VARCHAR(100) NOT NULL,
     linked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    by_prompt TINYINT NOT NULL DEFAULT 0, -- 1 once a board prompt started this card in the chat (not just a status command)
+    prompted_at TIMESTAMP NULL DEFAULT NULL, -- the last board prompt that started this card in the chat (a status command doesn't count)
     desktop TINYINT NULL, -- 1 desktop-app chat, 0 terminal (can't be opened), NULL linked before this was recorded
     PRIMARY KEY (card_id, session_id),
     FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE

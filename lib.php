@@ -988,9 +988,10 @@ function last_linked_card(PDO $db, array $clis, int $prefer): ?int
 {
     $marks = implode(',', array_fill(0, count($clis), '?'));
     // Only a board prompt moves a chat on: a card Claude merely ran status on (a follow-up it made) doesn't.
-    $st = $db->prepare("SELECT card_id FROM chat_links WHERE session_id IN ($marks) AND (card_id = ? OR by_prompt = 1)
-        ORDER BY linked_at DESC, card_id = ? DESC LIMIT 1");
-    $st->execute([...$clis, $prefer, $prefer]);
+    $st = $db->prepare("SELECT card_id FROM chat_links WHERE session_id IN ($marks) AND (card_id = ? OR prompted_at IS NOT NULL)
+        ORDER BY IF(card_id = ?, linked_at, prompted_at) DESC, card_id = ? DESC LIMIT 1");
+    // Other cards count from their last board prompt only, so a later status on them doesn't move the chat either.
+    $st->execute([...$clis, $prefer, $prefer, $prefer]);
     $id = $st->fetchColumn();
     return $id === false ? null : (int) $id;
 }
@@ -1045,8 +1046,8 @@ function hook_link(PDO $db, string $session, int $card, bool $byPrompt = false, 
     $db->prepare('INSERT INTO sessions (session_id, card_id, seen_at) VALUES (?, ?, NOW())
         ON DUPLICATE KEY UPDATE card_id = VALUES(card_id), seen_at = NOW(), active = 1')->execute([$session, $card]);
     // Separate from sessions so the card keeps its Open chat button after the chat moves on to another card.
-    $db->prepare('INSERT INTO chat_links (card_id, session_id, by_prompt, desktop) VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE linked_at = NOW(), by_prompt = GREATEST(by_prompt, VALUES(by_prompt)),
+    $db->prepare('INSERT INTO chat_links (card_id, session_id, prompted_at, desktop) VALUES (?, ?, IF(?, NOW(), NULL), ?)
+        ON DUPLICATE KEY UPDATE linked_at = NOW(), prompted_at = COALESCE(VALUES(prompted_at), prompted_at),
             desktop = COALESCE(VALUES(desktop), desktop)')->execute([$card, $session, (int) $byPrompt, $desktop === null ? null : (int) $desktop]);
     hook_touch($db, $session);
     return true;
