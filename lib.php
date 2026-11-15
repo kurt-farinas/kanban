@@ -889,10 +889,40 @@ function card_open_link(PDO $db, array $card, ?string $prompt = null): ?array
         : ['link' => new_chat_link($prompt, $card['folder']), 'prompt' => null, 'chat' => null];
 }
 
-// After a failed chat lookup: the card's 💬 button goes away. A board prompt pasted into the chat links it again.
+// After a failed chat lookup: forgets the card's links whose chat is surely gone (no file names it, or every file that
+// does is archived), so its 💬 button goes away. A file that can't be read or decoded (the app may be mid-write) keeps
+// every link, and so does finding no chat folders at all.
 function forget_chats(PDO $db, int $card): void
 {
-    $db->prepare('DELETE FROM chat_links WHERE card_id = ?')->execute([$card]);
+    $dirs = chat_sessions_dirs();
+    $st = $db->prepare('SELECT session_id FROM chat_links WHERE card_id = ?');
+    $st->execute([$card]);
+    $sessions = $st->fetchAll(PDO::FETCH_COLUMN);
+    if (!$dirs || !$sessions) {
+        return;
+    }
+    $keep = [];
+    foreach ($dirs as $dir) {
+        foreach (glob("$dir/local_*.json") ?: [] as $file) {
+            $raw = @file_get_contents($file);
+            if ($raw === false) {
+                return;
+            }
+            foreach ($sessions as $s) {
+                if (str_contains($raw, $s)) {
+                    $j = json_decode($raw, true);
+                    if (!is_array($j) || empty($j['isArchived'])) {
+                        $keep[$s] = true;
+                    }
+                }
+            }
+        }
+    }
+    $gone = array_values(array_diff($sessions, array_keys($keep)));
+    if ($gone) {
+        $marks = implode(',', array_fill(0, count($gone), '?'));
+        $db->prepare("DELETE FROM chat_links WHERE card_id = ? AND session_id IN ($marks)")->execute([$card, ...$gone]);
+    }
 }
 
 function same_folder(string $a, string $b): bool
@@ -988,7 +1018,7 @@ function notify(string $title, string $body): void
 // Claude Code hooks (hooks/claude_hook.php) keep sessions = which Claude session works on which card.
 function card_from_prompt(string $prompt): ?int
 {
-    // Only the prompts the board builds (claude_link, app.js planLink): a prompt that merely mentions a card must not link.
+    // Only the prompts the board builds (claude_prompt, plan_prompt): a prompt that merely mentions a card must not link.
     // Older wordings stay so chats opened before 2026-11-14 still link ("／" is the app's rewrite of a leading "/").
     $verbs = '(?:\/|／)feature-planner Plan card|Plan card|Build card|Review card|Deploy card|Update the plan for card'
         . '|Build the plan for card|Review the code for card';

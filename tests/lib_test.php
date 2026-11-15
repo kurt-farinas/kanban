@@ -449,13 +449,29 @@ $tests = [
         with_chats(['local_m.json' => chat('m', 'cli-m2', ['priorCliSessionIds' => ['cli-m']])], function () use ($a, $link) {
             ok(str_starts_with($link($a), 'claude://code/new?'), 'moved on under a new CLI id: ' . $link($a));
         });
+        $db->exec("UPDATE chat_links SET linked_at = '2026-01-01 10:00:00'"); // same second: ties go to the asking card
+        with_chats(['local_m.json' => chat('m', 'cli-m2', ['priorCliSessionIds' => ['cli-m']])], function () use ($a, $b, $link) {
+            ok($link($a) === 'claude://code/continue?session=local_m', 'tie, A: ' . $link($a));
+            ok($link($b) === 'claude://code/continue?session=local_m', 'tie, B: ' . $link($b));
+        });
     },
     'forget_chats_clears_has_chat' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');
         link_session($db, 'cli-g', $id, '2026-01-01 10:00:00');
-        ok(get_card($db, $id)['has_chat'] === 1, 'has_chat before');
-        forget_chats($db, $id);
-        ok(get_card($db, $id)['has_chat'] === 0, 'has_chat after');
+        $has = fn() => get_card($db, $id)['has_chat'];
+        forget_chats($db, $id); // no chat folders at all: can't tell, so nothing is forgotten
+        ok($has() === 1, 'forgot with no chat folders');
+        with_chats(['local_g.json' => chat('g', 'cli-g')], fn() => forget_chats($db, $id));
+        ok($has() === 1, 'forgot an open chat');
+        with_chats(['local_g.json' => '{"cliSessionId":"cli-g","isArch'], fn() => forget_chats($db, $id));
+        ok($has() === 1, 'forgot a half-written chat file');
+        link_session($db, 'cli-other', $id, '2026-01-01 11:00:00');
+        with_chats(['local_g.json' => chat('g', 'cli-g', ['isArchived' => true]), 'local_o.json' => chat('o', 'cli-other')],
+            fn() => forget_chats($db, $id));
+        ok($db->query("SELECT GROUP_CONCAT(session_id) FROM chat_links WHERE card_id = $id")->fetchColumn() === 'cli-other',
+            'archived chat kept or open one dropped');
+        with_chats(['local_x.json' => chat('x', 'cli-unrelated')], fn() => forget_chats($db, $id));
+        ok($has() === 0, 'deleted chat not forgotten');
     },
     'plan_prompt_links_card' => function (PDO $db) {
         $card = ['id' => 7, 'title' => 'T', 'project' => 'Alpha', 'col' => 'todo'];

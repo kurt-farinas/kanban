@@ -958,9 +958,11 @@ async function openWithPrompt(c, res) {
         }
     }
     openLink(res.link);
-    if (copied) toast(`Opened #${c.id}'s chat "${res.chat}". Message copied: press Ctrl+V, then Enter.`, { ms: 8000 });
+    // The plan message ends in ": " for the user's own words, so Enter would send it empty.
+    const how = res.prompt?.endsWith(': ') ? 'press Ctrl+V and type the change' : 'press Ctrl+V, then Enter';
+    if (copied) toast(`Opened #${c.id}'s chat "${res.chat}". Message copied: ${how}.`, { ms: 8000 });
     else if (res.prompt) {
-        toast(`Opened #${c.id}'s chat. ${busy ? "Another card's message is on the clipboard, so copy" : 'Copy'} this one into it: ${res.prompt}`,
+        toast(`Opened #${c.id}'s chat. ${busy ? 'An earlier message is still on the clipboard, so copy' : 'Copy'} this one into it: ${res.prompt}`,
             { kind: 'error' });
     }
 }
