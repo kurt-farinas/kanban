@@ -939,26 +939,39 @@ async function moveCard(params) {
     load();
 }
 
-// res: the move's {link, prompt}. A prompt means link reopens the card's chat, which can't take a typed-in
-// message, so the message goes on the clipboard (copied here, while the page still has focus).
+// res: {link, prompt, chat} from card_open_link. A prompt means link reopens the card's chat, which can't take a
+// typed-in message, so the message goes on the clipboard (copied before the link, while the page still has focus).
+// A second message within COPY_MS isn't copied over the first, which may not be pasted yet: its toast shows the text.
+const COPY_MS = 15000;
+let lastCopyAt = 0;
+
+async function openWithPrompt(c, res) {
+    let copied = false;
+    const busy = Date.now() - lastCopyAt < COPY_MS;
+    if (res.prompt && !busy) {
+        try {
+            await navigator.clipboard.writeText(res.prompt);
+            copied = true;
+            lastCopyAt = Date.now();
+        } catch {
+            // focus lost or clipboard refused: the toast below shows the text instead
+        }
+    }
+    openLink(res.link);
+    if (copied) toast(`Opened #${c.id}'s chat "${res.chat}". Message copied: press Ctrl+V, then Enter.`, { ms: 8000 });
+    else if (res.prompt) {
+        toast(`Opened #${c.id}'s chat. ${busy ? "Another card's message is on the clipboard, so copy" : 'Copy'} this one into it: ${res.prompt}`,
+            { kind: 'error' });
+    }
+}
+
 function openSoon(c, res) {
     opening++;
     let close = null;
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
         opening--;
         close(); // the Undo goes before the link opens
-        let copied = false;
-        if (res.prompt) {
-            try {
-                await navigator.clipboard.writeText(res.prompt);
-                copied = true;
-            } catch {
-                // focus lost or clipboard refused: the toast below shows the text instead
-            }
-        }
-        openLink(res.link);
-        if (copied) toast(`Opened #${c.id}'s chat "${res.chat}". Message copied: press Ctrl+V, then Enter.`, { ms: 8000 });
-        else if (res.prompt) toast(`Opened #${c.id}'s chat. Copy this message into it: ${res.prompt}`, { kind: 'error' });
+        openWithPrompt(c, res);
     }, OPEN_MS);
     close = toast(`Opening Claude for #${c.id}…`, {
         ms: OPEN_MS,
@@ -1198,10 +1211,6 @@ addForm.addEventListener('submit', async e => {
 
 // --- Details panel ---
 
-const planLink = c => 'claude://code/new?prompt='
-    + encodeURIComponent(`Update the plan for card #${c.id} (${c.project}): `)
-    + '&folder=' + encodeURIComponent(c.folder);
-
 const chatBtn = document.getElementById('chat-btn');
 
 function openPanel(id, editTitle = false) {
@@ -1360,17 +1369,26 @@ noteForm.addEventListener('submit', async e => {
     }
 });
 
-document.getElementById('plan-btn').addEventListener('click', () => {
-    if (openCard) openLink(planLink(openCard));
+// The card's chat (with the message copied) or a new one, like a move into a Claude column.
+document.getElementById('plan-btn').addEventListener('click', async () => {
+    if (!openCard) return;
+    const c = openCard;
+    try {
+        await openWithPrompt(c, await api({ a: 'plan_open', id: c.id }));
+    } catch (err) {
+        if (!err.offline) toastError(err);
+    }
 });
 
 // Looks the chat up on each click, so a chat archived since the board loaded gives the toast, not the wrong place.
+// A 404 also made the server forget the card's chats, so the reload drops its 💬 button.
 async function openChat(id) {
     try {
         openLink((await api({ a: 'chat', id })).url);
         toast('Opening chat…');
     } catch (err) {
         if (!err.offline) toastError(err);
+        if (err.status === 404) load();
     }
 }
 
@@ -1379,8 +1397,10 @@ async function showChatBtn(c) {
     let title = null;
     try {
         if (c.has_chat) title = (await api({ a: 'chat', id: c.id })).title;
-    } catch {
-        // 404: the chat was archived, deleted or not found, so there is nothing to open.
+    } catch (err) {
+        // 404: the chat was archived, deleted or not found, so there is nothing to open; the server forgot it,
+        // so the reload drops the card's 💬 button too.
+        if (err.status === 404) load();
     }
     if (String(c.id) !== openId) return;
     chatBtn.textContent = title ? `Open chat · ${title}` : 'Open chat';

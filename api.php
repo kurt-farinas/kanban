@@ -14,7 +14,7 @@
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
-const GET_ACTIONS = ['list', 'card', 'events', 'plan', 'chat', 'requests', 'report_preview', 'projects'];
+const GET_ACTIONS = ['list', 'card', 'events', 'plan', 'chat', 'plan_open', 'requests', 'report_preview', 'projects'];
 const POST_ACTIONS = ['add', 'move', 'edit', 'delete', 'note', 'section', 'start_db', 'request_add', 'request_card', 'request_delete',
     'project_add', 'project_edit', 'project_archive', 'sections_save'];
 
@@ -119,9 +119,13 @@ try {
         case 'chat':
             $chat = find_chat($db, int_param('id'));
             if ($chat === null) {
+                forget_chats($db, int_param('id'));
                 out(['error' => "This card's chat was archived or deleted."], 404);
             }
             out(['url' => 'claude://code/continue?session=' . $chat['id'], 'title' => $chat['title']]);
+        case 'plan_open': // the panel's "Update plan" button
+            $card = get_card($db, int_param('id'));
+            out(card_open_link($db, $card, plan_prompt($card)));
         case 'add':
             out(['id' => add_card($db, $_POST['title'] ?? '', $_POST['project'] ?? '', 'user', null, $_POST['section'] ?? null)]);
         case 'edit':

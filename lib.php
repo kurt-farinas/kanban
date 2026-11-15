@@ -841,7 +841,18 @@ function find_cards(PDO $db, string $text): array
 function claude_link(array $card, string $folder): ?string
 {
     $prompt = claude_prompt($card);
-    return $prompt === null ? null : 'claude://code/new?prompt=' . rawurlencode($prompt) . '&folder=' . rawurlencode($folder);
+    return $prompt === null ? null : new_chat_link($prompt, $folder);
+}
+
+function new_chat_link(string $prompt, string $folder): string
+{
+    return 'claude://code/new?prompt=' . rawurlencode($prompt) . '&folder=' . rawurlencode($folder);
+}
+
+// The panel's "Update plan" message; card_from_prompt matches it, so pasting it relinks the chat.
+function plan_prompt(array $card): string
+{
+    return "Update the plan for card #{$card['id']} ({$card['project']}): ";
 }
 
 // The message for a card's Claude column, or null for todo and test.
@@ -865,16 +876,29 @@ function claude_prompt(array $card): ?string
 
 // What a move into a Claude column opens: the card's existing chat (continue links can't carry a message, so
 // 'prompt' is for the clipboard; tested 2026-11-16), else a new chat with the message typed in. Null for todo and test.
-function card_open_link(PDO $db, array $card): ?array
+// Only a chat in the card's project folder that hasn't moved on to another card is reused.
+function card_open_link(PDO $db, array $card, ?string $prompt = null): ?array
 {
-    $prompt = claude_prompt($card);
+    $prompt ??= claude_prompt($card);
     if ($prompt === null) {
         return null;
     }
-    $chat = find_chat($db, (int) $card['id']);
+    $chat = find_chat($db, (int) $card['id'], $card['folder'], true);
     return $chat
         ? ['link' => 'claude://code/continue?session=' . $chat['id'], 'prompt' => $prompt, 'chat' => $chat['title']]
-        : ['link' => claude_link($card, $card['folder']), 'prompt' => null, 'chat' => null];
+        : ['link' => new_chat_link($prompt, $card['folder']), 'prompt' => null, 'chat' => null];
+}
+
+// After a failed chat lookup: the card's 💬 button goes away. A board prompt pasted into the chat links it again.
+function forget_chats(PDO $db, int $card): void
+{
+    $db->prepare('DELETE FROM chat_links WHERE card_id = ?')->execute([$card]);
+}
+
+function same_folder(string $a, string $b): bool
+{
+    $n = fn($p) => rtrim(strtolower(str_replace('/', '\\', $p)), '\\');
+    return $n($a) === $n($b);
 }
 
 // Folders holding the desktop app's chat files (local_*.json); the tests point CLAUDE_SESSIONS_GLOB at fakes.
@@ -887,7 +911,9 @@ function chat_sessions_dirs(): array
 
 // The desktop app's chat for the card's newest linked session that isn't archived: ['id' => 'local_…', 'title' => …] or null.
 // A chat continued under a new CLI id keeps the old ones in priorCliSessionIds.
-function find_chat(PDO $db, int $card): ?array
+// $folder: skip chats started in another folder (a file without one matches). $current: skip chats whose latest link,
+// over all their CLI ids, is another card's (the chat moved on).
+function find_chat(PDO $db, int $card, ?string $folder = null, bool $current = false): ?array
 {
     // linked_at, not seen_at: the chat that last linked this card wins, not whichever touched it last.
     $st = $db->prepare('SELECT session_id FROM chat_links WHERE card_id = ? ORDER BY linked_at DESC');
@@ -907,20 +933,34 @@ function find_chat(PDO $db, int $card): ?array
             if (!is_array($j) || !empty($j['isArchived']) || !is_string($id) || !preg_match('/^local_[A-Za-z0-9-]{1,64}$/', $id)) {
                 continue;
             }
-            $chat = ['id' => $id, 'title' => is_string($j['title'] ?? null) ? $j['title'] : ''];
-            foreach ([$j['cliSessionId'] ?? null, ...(array) ($j['priorCliSessionIds'] ?? [])] as $cli) {
-                if (is_string($cli)) {
-                    $chats[$cli] ??= $chat;
-                }
+            $dir = $j['originCwd'] ?? $j['cwd'] ?? null;
+            $clis = array_values(array_filter([$j['cliSessionId'] ?? null, ...(array) ($j['priorCliSessionIds'] ?? [])], 'is_string'));
+            $chat = ['id' => $id, 'title' => is_string($j['title'] ?? null) ? $j['title'] : '',
+                'folder' => is_string($dir) ? $dir : null, 'clis' => $clis];
+            foreach ($clis as $cli) {
+                $chats[$cli] ??= $chat;
             }
         }
     }
     foreach ($sessions as $s) {
-        if (isset($chats[$s])) {
-            return $chats[$s];
+        $chat = $chats[$s] ?? null;
+        if ($chat === null || ($folder !== null && $chat['folder'] !== null && !same_folder($chat['folder'], $folder))
+            || ($current && last_linked_card($db, $chat['clis'], $card) !== $card)) {
+            continue;
         }
+        return ['id' => $chat['id'], 'title' => $chat['title']];
     }
     return null;
+}
+
+// The card most recently linked to any of these CLI ids (one chat); ties go to $prefer.
+function last_linked_card(PDO $db, array $clis, int $prefer): ?int
+{
+    $marks = implode(',', array_fill(0, count($clis), '?'));
+    $st = $db->prepare("SELECT card_id FROM chat_links WHERE session_id IN ($marks) ORDER BY linked_at DESC, card_id = ? DESC LIMIT 1");
+    $st->execute([...$clis, $prefer]);
+    $id = $st->fetchColumn();
+    return $id === false ? null : (int) $id;
 }
 
 // Windows notification through notify/toast.ps1, started in the background so the caller never waits.

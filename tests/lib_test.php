@@ -416,6 +416,52 @@ $tests = [
         move_card($db, $id, 'test', 'user');
         ok(card_open_link($db, get_card($db, $id)) === null, 'test column link');
     },
+    'card_open_link_skips_other_folder' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        move_card($db, $id, 'building', 'user');
+        link_session($db, 'cli-f', $id, '2026-01-01 10:00:00');
+        $link = fn() => card_open_link($db, get_card($db, $id))['link'];
+        with_chats(['local_f.json' => chat('f', 'cli-f', ['originCwd' => 'C:\other', 'cwd' => 'C:\xampp\htdocs\alpha'])], function () use ($link) {
+            ok(str_starts_with($link(), 'claude://code/new?'), 'other folder reused: ' . $link());
+        });
+        with_chats(['local_f.json' => chat('f', 'cli-f', ['cwd' => 'C:/XAMPP/htdocs/alpha/'])], function () use ($link) {
+            ok($link() === 'claude://code/continue?session=local_f', 'same folder: ' . $link());
+        });
+        with_chats(['local_f.json' => chat('f', 'cli-f')], function () use ($link) {
+            ok($link() === 'claude://code/continue?session=local_f', 'no folder field: ' . $link());
+        });
+    },
+    'card_open_link_skips_chat_moved_on' => function (PDO $db) {
+        $a = add_card($db, 'A', 'Alpha', 'user');
+        $b = add_card($db, 'B', 'Alpha', 'user');
+        move_card($db, $a, 'building', 'user');
+        move_card($db, $b, 'building', 'user');
+        link_session($db, 'cli-m', $a, '2026-01-01 10:00:00');
+        link_session($db, 'cli-m', $b, '2026-01-01 11:00:00');
+        $link = fn($id) => card_open_link($db, get_card($db, $id))['link'];
+        with_chats(['local_m.json' => chat('m', 'cli-m')], function () use ($db, $a, $b, $link) {
+            ok(str_starts_with($link($a), 'claude://code/new?'), 'moved-on chat reused for A: ' . $link($a));
+            ok($link($b) === 'claude://code/continue?session=local_m', 'B: ' . $link($b));
+            ok(find_chat($db, $a)['id'] === 'local_m', 'chat button rule changed');
+        });
+        $db->exec("DELETE FROM chat_links WHERE card_id = $b");
+        link_session($db, 'cli-m2', $b, '2026-01-01 11:00:00'); // the same chat, continued under a new CLI id
+        with_chats(['local_m.json' => chat('m', 'cli-m2', ['priorCliSessionIds' => ['cli-m']])], function () use ($a, $link) {
+            ok(str_starts_with($link($a), 'claude://code/new?'), 'moved on under a new CLI id: ' . $link($a));
+        });
+    },
+    'forget_chats_clears_has_chat' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        link_session($db, 'cli-g', $id, '2026-01-01 10:00:00');
+        ok(get_card($db, $id)['has_chat'] === 1, 'has_chat before');
+        forget_chats($db, $id);
+        ok(get_card($db, $id)['has_chat'] === 0, 'has_chat after');
+    },
+    'plan_prompt_links_card' => function (PDO $db) {
+        $card = ['id' => 7, 'title' => 'T', 'project' => 'Alpha', 'col' => 'todo'];
+        ok(plan_prompt($card) === 'Update the plan for card #7 (Alpha): ', plan_prompt($card));
+        ok(card_from_prompt(plan_prompt($card)) === 7, 'plan prompt does not link');
+    },
     'find_chat_prior_ids_bad_files_and_no_match' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');
         ok(find_chat($db, $id) === null, 'chat for a card with no sessions');
