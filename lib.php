@@ -1080,17 +1080,24 @@ function hook_stop(PDO $db, string $session): void
 }
 
 // One Claude Code hook payload (hooks/claude_hook.php): keeps the session's link and its card's dot right.
-function hook_event(PDO $db, array $in): void
+// Returns text for Claude's context (a new chat's card), or null.
+function hook_event(PDO $db, array $in): ?string
 {
     $session = (string) ($in['session_id'] ?? '');
     if ($session === '') {
-        return;
+        return null;
     }
     $desktop = isset($in['kanban_desktop']) ? (bool) $in['kanban_desktop'] : null; // set by hooks/claude_hook.php
+    $context = null;
     switch ($in['hook_event_name'] ?? '') {
         case 'UserPromptSubmit':
-            $card = card_from_prompt((string) ($in['prompt'] ?? ''));
-            if ($card === null || !hook_link($db, $session, $card, true, $desktop)) {
+            $prompt = (string) ($in['prompt'] ?? '');
+            $card = card_from_prompt($prompt);
+            $linked = $card !== null && hook_link($db, $session, $card, true, $desktop);
+            if (chat_first_seen($db, $session) && $card === null && $desktop === true) {
+                $context = hook_new_chat_card($db, $session, (string) ($in['cwd'] ?? ''), $prompt);
+            }
+            if (!$linked && $context === null) {
                 hook_touch($db, $session);
             }
             break;
@@ -1110,6 +1117,71 @@ function hook_event(PDO $db, array $in): void
             break;
     }
     hook_prune($db);
+    return $context;
+}
+
+// True only the first time the hook sees this chat's prompt.
+function chat_first_seen(PDO $db, string $session): bool
+{
+    $st = $db->prepare('INSERT IGNORE INTO chat_seen (session_id) VALUES (?)');
+    $st->execute([$session]);
+    return $st->rowCount() === 1;
+}
+
+// The non-archived project whose folder holds $cwd (a worktree inside it counts), longest folder first; null if none.
+function project_for_folder(PDO $db, string $cwd): ?array
+{
+    $norm = fn($p) => rtrim(strtolower(str_replace('\\', '/', $p)), '/');
+    $dir = $norm($cwd);
+    $best = null;
+    foreach ($db->query('SELECT id, name, folder FROM projects WHERE archived = 0') as $p) {
+        $f = $norm($p['folder']);
+        // str_contains: a drive root ("c:") would hold every folder.
+        if (str_contains($f, '/') && ($dir === $f || str_starts_with($dir, "$f/")) && strlen($f) > strlen($best['f'] ?? '')) {
+            $best = ['id' => (int) $p['id'], 'name' => $p['name'], 'f' => $f];
+        }
+    }
+    return $best;
+}
+
+// A card title from a chat's first prompt: its first line of own words (pasted blocks dropped), at most 80 characters.
+function title_from_prompt(string $prompt): string
+{
+    $text = preg_replace('/<([a-z][\w-]*)\b[^>]*>.*?<\/\1>/is', "\n", $prompt) ?? $prompt;
+    foreach (preg_split('/\R/u', $text) ?: [] as $line) {
+        $line = trim(preg_replace('/\s+/u', ' ', $line) ?? '');
+        if ($line !== '') {
+            return mb_strlen($line) > 80 ? mb_substr($line, 0, 79) . '…' : $line;
+        }
+    }
+    return 'New chat';
+}
+
+// A new desktop chat in a project folder, not started from the board and not linked yet: adds its card, links it,
+// and returns the note for Claude's context (the card number, so Claude uses it instead of adding another).
+// Skipped: the board's report chats, and chats whose first prompt names an existing card (a handed-off or forked chat).
+function hook_new_chat_card(PDO $db, string $session, string $cwd, string $prompt): ?string
+{
+    if ($cwd === '' || preg_match('/^\s*Make the president report for /', $prompt)) {
+        return null;
+    }
+    preg_match_all('/\bcard #(\d{1,9})\b/i', $prompt, $m);
+    $st = $db->prepare('SELECT (SELECT COUNT(*) FROM sessions WHERE session_id = ?) + (SELECT COUNT(*) FROM chat_links WHERE session_id = ?)
+        + (SELECT COUNT(*) FROM cards WHERE FIND_IN_SET(id, ?))');
+    $st->execute([$session, $session, implode(',', $m[1])]);
+    $project = $st->fetchColumn() > 0 ? null : project_for_folder($db, $cwd);
+    if ($project === null) {
+        return null;
+    }
+    $title = title_from_prompt($prompt);
+    $id = add_card($db, $title, $project['name'], 'claude');
+    hook_link($db, $session, $id, true, true);
+    $st = $db->prepare('SELECT COUNT(*) FROM sections WHERE project_id = ?');
+    $st->execute([$project['id']]);
+    $section = $st->fetchColumn() > 0 ? " and a section (board.php section $id \"<name>\"; board.php sections \"{$project['name']}\" lists them)" : '';
+    return "Kanban: this new chat got its own card, #$id \"$title\" in {$project['name']} (To do). Use #$id for this chat's work"
+        . " and do not add another card for it. Give it a short title (board.php title $id \"<title>\")$section,"
+        . " then move it and set its status as the card rules say.";
 }
 
 // Drops sessions unseen for a day; turns off dots with no active session seen in 30 min (crashed, closed or relinked).
@@ -1118,6 +1190,7 @@ function hook_prune(PDO $db): void
     $db->exec('DELETE FROM sessions WHERE seen_at < NOW() - INTERVAL 24 HOUR');
     // Kept for months: the card's Open chat button finds its chat through these rows.
     $db->exec('DELETE FROM chat_links WHERE linked_at < NOW() - INTERVAL 180 DAY');
+    $db->exec('DELETE FROM chat_seen WHERE seen_at < NOW() - INTERVAL 180 DAY');
     $db->exec('UPDATE cards c SET working_since = NULL, status = NULL, updated_at = updated_at
         WHERE working_since IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sessions s
             WHERE s.card_id = c.id AND s.active = 1 AND s.seen_at >= NOW() - INTERVAL 30 MINUTE)');

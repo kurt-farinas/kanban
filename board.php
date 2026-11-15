@@ -1,11 +1,11 @@
 <?php
-// CLI for Claude: php board.php add|move|block|unblock|find|status|note|notes|plan|section|sections|projects|report|sync|backup ...
+// CLI for Claude: php board.php add|title|move|block|unblock|find|status|note|notes|plan|section|sections|projects|report|sync|backup ...
 require __DIR__ . '/config.php';
 require __DIR__ . '/lib.php';
 
 const USAGE = 'Usage: php board.php add "<title>" <project> [section] | move <id> <column> [position]'
     . ' | block <id> "<reason>" | unblock <id> | find "<text>"'
-    . ' | status <id> "<text>" | note <id> "<text>" | notes <id> | plan <id> <path>'
+    . ' | title <id> "<text>" | status <id> "<text>" | note <id> "<text>" | notes <id> | plan <id> <path>'
     . ' | section <id> "<name>"|none | sections <project> | projects | report <project> <from> <to> | sync | backup';
 
 function int_arg(?string $s): int
@@ -71,6 +71,10 @@ try {
             need($a, $b);
             $id = add_card($db, $a, $b, 'claude', null, $c); // first: echo '#', add_card() printed "#" before an error
             echo "#$id\n";
+            break;
+        case 'title':
+            need($a, $b);
+            edit_card($db, int_arg($a), $b, get_card($db, int_arg($a))['project'], 'claude');
             break;
         case 'move':
             need($a, $b);

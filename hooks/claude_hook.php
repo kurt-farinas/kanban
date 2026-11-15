@@ -1,6 +1,7 @@
 <?php
 // Claude Code hook for UserPromptSubmit, PreToolUse, PostToolUse, Stop and StopFailure: keeps each card's working dot right.
-// Never disturbs Claude: prints nothing (UserPromptSubmit stdout goes into Claude's context) and exits 0 on any error.
+// Never disturbs Claude: exits 0 on any error, and prints only a new chat's card note (UserPromptSubmit stdout goes into
+// Claude's context).
 ini_set('display_errors', '0');
 error_reporting(0);
 try {
@@ -19,7 +20,10 @@ try {
         @unlink($down);
         // The desktop app gives its chats this id (local_…); a terminal session has none, so the board can't open it.
         $in['kanban_desktop'] = str_starts_with((string) getenv('CLAUDE_CODE_HOST_SESSION_ID'), 'local_');
-        hook_event($db, $in);
+        $context = hook_event($db, $in);
+        if ($context !== null) {
+            echo $context, PHP_EOL;
+        }
         if (($in['hook_event_name'] ?? '') === 'Stop') {
             backup_if_due($db); // covers days the PC stays on without a fresh login
         }

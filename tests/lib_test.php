@@ -495,6 +495,40 @@ $tests = [
             ok(card_open_link($db, get_card($db, $b))['link'] === 'claude://code/continue?session=local_s', 'status on A took B\'s chat');
         });
     },
+    'new_desktop_chat_gets_a_card' => function (PDO $db) {
+        $db->exec('DELETE FROM chat_seen');
+        $ev = fn($s, $prompt, $cwd = 'c:/XAMPP/htdocs/alpha/.claude/worktrees/x', $desk = true) => hook_event($db,
+            ['session_id' => $s, 'kanban_desktop' => $desk, 'cwd' => $cwd, 'hook_event_name' => 'UserPromptSubmit', 'prompt' => $prompt]);
+        $count = fn() => (int) $db->query('SELECT COUNT(*) FROM cards')->fetchColumn();
+        $msg = $ev('n1', "<pasted_content id=\"x\">long paste</pasted_content>\n\n  fix   the loan   totals  \nmore");
+        $id = (int) $db->query('SELECT MAX(id) FROM cards')->fetchColumn();
+        $c = get_card($db, $id);
+        ok($c['title'] === 'fix the loan totals' && $c['project'] === 'Alpha' && $c['col'] === 'todo', 'card: ' . json_encode($c));
+        ok($c['has_chat'] === 1 && $c['working_since'] !== null, 'card not linked to the chat');
+        ok(is_string($msg) && str_contains($msg, "#$id") && str_contains($msg, "board.php title $id"), 'context: ' . var_export($msg, true));
+        ok(str_contains($msg, 'board.php sections "Alpha"'), 'Alpha has sections: the context asks for one, name quoted');
+        ok($ev('n1', 'next prompt') === null && $count() === 1, 'second prompt added a card');
+        delete_card($db, $id, 'user');
+        ok($ev('n1', 'after delete') === null && $count() === 0, 'a deleted card came back');
+        ok($ev('t1', 'terminal chat', desk: false) === null && $count() === 0, 'terminal chat got a card');
+        ok($ev('o1', 'other folder', 'C:\xampp\htdocs\alphabet') === null && $count() === 0, 'folder prefix matched');
+        $db->exec("UPDATE projects SET archived = 1 WHERE name = 'Beta'");
+        ok($ev('b1', 'archived', 'C:\xampp\htdocs\beta') === null && $count() === 0, 'archived project got a card');
+        $db->exec("UPDATE projects SET archived = 0 WHERE name = 'Beta'");
+        $a = add_card($db, 'A', 'Alpha', 'user');
+        ok($ev('p1', "Build card #$a (Alpha): A") === null && $count() === 1, 'board prompt added a second card');
+        link_session($db, 'old', $a, '2026-01-01 10:00:00');
+        ok($ev('old', 'linked before this feature') === null && $count() === 1, 'already linked chat got a card');
+        ok($ev('r1', 'Make the president report for Alpha Online from 2026-01-01 to 2026-01-07 using x') === null && $count() === 1, 'report chat got a card');
+        ok($ev('h1', "Carry on with card #$a: the plan is in planning/a.md") === null && $count() === 1, 'handed-off chat got a second card');
+        ok($ev('h2', 'Carry on with card #99999') !== null && $count() === 2, 'unknown card number blocked the card');
+        $db->exec("INSERT INTO projects (name, folder, color) VALUES ('Root', 'D:\\\\', 'teal')");
+        ok($ev('d1', 'drive root', 'D:\work\x') === null, 'drive-root folder matched');
+        $db->exec("DELETE FROM projects WHERE name = 'Root'");
+        ok(str_contains((string) $ev('g1', "\n", 'C:\xampp\htdocs\gamma'), 'New chat'), 'empty prompt title');
+        ok(!str_contains((string) $ev('g2', str_repeat('é', 300), 'C:\xampp\htdocs\gamma'), 'section'), 'Gamma has no sections');
+        ok(mb_strlen(get_card($db, (int) $db->query('SELECT MAX(id) FROM cards')->fetchColumn())['title']) === 80, 'long title not cut to 80');
+    },
     'has_chat_only_for_desktop_chats' => function (PDO $db) {
         $term = add_card($db, 'T', 'Alpha', 'user');
         $desk = add_card($db, 'D', 'Alpha', 'user');

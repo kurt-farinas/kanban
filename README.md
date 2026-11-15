@@ -30,6 +30,7 @@ Database settings other than XAMPP's default (`root`, no password) go in `config
 
 ```
 php board.php add "<title>" <project> [section]  # prints #id
+php board.php title <id> "<text>"         # rename a card
 php board.php move <id> <column> [pos]    # todo, planning, building, review, test, live
 php board.php block <id> "<question>"
 php board.php unblock <id>
@@ -51,7 +52,7 @@ To have Claude keep the board current, add a rule to your `~/.claude/CLAUDE.md` 
 
 ## Working dot (hooks)
 
-A card shows a pulsing dot while a Claude Code session works on it. Claude Code hooks run `hooks/claude_hook.php`, which links a session to card N when the prompt contains `card #N` (the board's links do) or when Claude runs `board.php <cmd> N`, and turns the dot and status off when the session stops (or after 30 min unseen). Add one entry per event to `~/.claude/settings.json`, next to any hooks you already have:
+A card shows a pulsing dot while a Claude Code session works on it. Claude Code hooks run `hooks/claude_hook.php`, which links a session to card N when the prompt starts with one of the board's messages (`Build card #N`, …) or when Claude runs `board.php status N`, and turns the dot and status off when the session stops (or after 30 min unseen). Add one entry per event to `~/.claude/settings.json`, next to any hooks you already have:
 
 ```json
 "hooks": {
@@ -63,7 +64,9 @@ A card shows a pulsing dot while a Claude Code session works on it. Claude Code 
 }
 ```
 
-The hook prints nothing and always exits 0, so a stopped MySQL never gets in Claude's way.
+A new desktop chat started inside a project's folder (or a worktree in it), not from the board, gets a card of its own on its first message: titled from that message, in To do, linked to the chat. The hook tells Claude the card number so it renames and uses that card instead of adding another. Each chat gets this once, even if you delete the card. Needs `migrations/010_chat_seen.sql`.
+
+The hook always exits 0 and prints nothing except that new-card note, so a stopped MySQL never gets in Claude's way.
 
 Blocking a card (from the page or `board.php block`) also shows a Windows notification, "Card #N needs you", through `notify/toast.ps1`. Set the environment variable `KANBAN_NO_NOTIFY` to turn it off.
 

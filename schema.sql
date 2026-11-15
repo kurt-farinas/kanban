@@ -89,6 +89,12 @@ CREATE TABLE chat_links (
     FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Every chat whose prompt the hook has seen: a new desktop chat gets a card once, never again (even if that card is deleted).
+CREATE TABLE chat_seen (
+    session_id VARCHAR(100) PRIMARY KEY,
+    seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Last DEPLOYMENTS.md mtime and size parsed per file.
 CREATE TABLE deploy_sync (
     file VARCHAR(500) PRIMARY KEY,
