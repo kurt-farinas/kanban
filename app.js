@@ -909,7 +909,9 @@ function openQuestion(c, col) {
     const verb = { planning: 'Plan', building: 'Start building', review: 'Review' }[col];
     return {
         title: `${verb} #${c.id} with Claude?`,
-        body: `"${c.title}" moves to ${LABELS[col]} and a new Claude chat opens in ${c.project}'s folder.`,
+        body: c.has_chat
+            ? `"${c.title}" moves to ${LABELS[col]} and this card's chat opens (a new one if that chat was archived).`
+            : `"${c.title}" moves to ${LABELS[col]} and a new Claude chat opens in ${c.project}'s folder.`,
         ok: 'Move and open Claude',
     };
 }
@@ -928,7 +930,7 @@ async function moveCard(params) {
     }
     try {
         const res = await api(params, true);
-        if (opens && res.link) openSoon(c, res.link);
+        if (opens && res.link) openSoon(c, res);
         else toast(c?.col === params.col ? `Reordered in ${to}` : `Moved to ${to}`);
     } catch (err) {
         toastError(err);
@@ -936,13 +938,26 @@ async function moveCard(params) {
     load();
 }
 
-function openSoon(c, link) {
+// res: the move's {link, prompt}. A prompt means link reopens the card's chat, which can't take a typed-in
+// message, so the message goes on the clipboard (copied here, while the page still has focus).
+function openSoon(c, res) {
     opening++;
     let close = null;
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
         opening--;
         close(); // the Undo goes before the link opens
-        openLink(link);
+        let copied = false;
+        if (res.prompt) {
+            try {
+                await navigator.clipboard.writeText(res.prompt);
+                copied = true;
+            } catch {
+                // focus lost or clipboard refused: the toast below shows the text instead
+            }
+        }
+        openLink(res.link);
+        if (copied) toast(`Opened #${c.id}'s chat. Message copied: press Ctrl+V, then Enter.`, { ms: 8000 });
+        else if (res.prompt) toast(`Opened #${c.id}'s chat. Copy this message into it: ${res.prompt}`, { kind: 'error' });
     }, OPEN_MS);
     close = toast(`Opening Claude for #${c.id}…`, {
         ms: OPEN_MS,

@@ -397,6 +397,25 @@ $tests = [
             ok(find_chat($db, $id)['id'] === 'local_old', 'archived chat used: ' . json_encode(find_chat($db, $id)));
         });
     },
+    'card_open_link_uses_existing_chat' => function (PDO $db) {
+        $id = add_card($db, 'A', 'Alpha', 'user');
+        move_card($db, $id, 'building', 'user');
+        $o = card_open_link($db, get_card($db, $id));
+        ok($o['prompt'] === null && $o['chat'] === null && str_starts_with($o['link'], 'claude://code/new?prompt='), json_encode($o));
+        link_session($db, 'cli-x', $id, '2026-01-01 10:00:00');
+        with_chats(['local_x.json' => chat('x', 'cli-x')], function () use ($db, $id) {
+            $o = card_open_link($db, get_card($db, $id));
+            ok($o['link'] === 'claude://code/continue?session=local_x', json_encode($o));
+            ok(str_starts_with($o['prompt'], "Build card #$id (Alpha): "), json_encode($o));
+            ok($o['chat'] === 'Chat x', json_encode($o));
+        });
+        with_chats(['local_x.json' => chat('x', 'cli-x', ['isArchived' => true])], function () use ($db, $id) {
+            $o = card_open_link($db, get_card($db, $id));
+            ok($o['prompt'] === null && str_starts_with($o['link'], 'claude://code/new?prompt='), 'archived: ' . json_encode($o));
+        });
+        move_card($db, $id, 'test', 'user');
+        ok(card_open_link($db, get_card($db, $id)) === null, 'test column link');
+    },
     'find_chat_prior_ids_bad_files_and_no_match' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');
         ok(find_chat($db, $id) === null, 'chat for a card with no sessions');

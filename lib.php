@@ -840,6 +840,13 @@ function find_cards(PDO $db, string $text): array
 
 function claude_link(array $card, string $folder): ?string
 {
+    $prompt = claude_prompt($card);
+    return $prompt === null ? null : 'claude://code/new?prompt=' . rawurlencode($prompt) . '&folder=' . rawurlencode($folder);
+}
+
+// The message for a card's Claude column, or null for todo and test.
+function claude_prompt(array $card): ?string
+{
     // Never start with "/": Claude desktop turns a leading slash in a link's prompt into a full-width "／" (no slash commands from links).
     $id = $card['id'];
     $plan = $card['plan_path'] ?? null;
@@ -853,8 +860,21 @@ function claude_link(array $card, string $folder): ?string
         return null;
     }
     $title = rtrim($card['title'], '. ');
-    $prompt = mb_substr("$verb card #$id ({$card['project']}): $title. $ask", 0, 4000);
-    return 'claude://code/new?prompt=' . rawurlencode($prompt) . '&folder=' . rawurlencode($folder);
+    return mb_substr("$verb card #$id ({$card['project']}): $title. $ask", 0, 4000);
+}
+
+// What a move into a Claude column opens: the card's existing chat (continue links can't carry a message, so
+// 'prompt' is for the clipboard; tested 2026-11-16), else a new chat with the message typed in. Null for todo and test.
+function card_open_link(PDO $db, array $card): ?array
+{
+    $prompt = claude_prompt($card);
+    if ($prompt === null) {
+        return null;
+    }
+    $chat = find_chat($db, (int) $card['id']);
+    return $chat
+        ? ['link' => 'claude://code/continue?session=' . $chat['id'], 'prompt' => $prompt, 'chat' => $chat['title']]
+        : ['link' => claude_link($card, $card['folder']), 'prompt' => null, 'chat' => null];
 }
 
 // Folders holding the desktop app's chat files (local_*.json); the tests point CLAUDE_SESSIONS_GLOB at fakes.

@@ -173,7 +173,8 @@ try {
     $from = card_col($db, $id);
     move_card($db, $id, $col, 'user', int_param('position', true));
     $card = get_card($db, $id);
-    out(['ok' => true, 'link' => $from === $col ? null : claude_link($card, $card['folder'])]);
+    $o = $from === $col ? null : card_open_link($db, $card);
+    out(['ok' => true, 'link' => $o['link'] ?? null, 'prompt' => $o['prompt'] ?? null, 'chat' => $o['chat'] ?? null]);
 } catch (CardConflict $e) {
     out(['error' => $e->getMessage(), 'conflict' => true], 409);
 } catch (InvalidArgumentException $e) {
