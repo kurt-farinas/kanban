@@ -16,7 +16,7 @@ const CARD_SELECT = 'SELECT c.id, c.title, c.col, c.position, c.blocked, c.block
         c.status, c.working_since, c.plan_path, c.request_id, c.live_at, c.section_id, s.name AS section,
         r.kind AS request_kind, r.requester AS request_requester,
         (SELECT COUNT(*) FROM notes n WHERE n.card_id = c.id) AS note_count,
-        EXISTS (SELECT 1 FROM chat_links cl WHERE cl.card_id = c.id) AS has_chat,
+        EXISTS (SELECT 1 FROM chat_links cl WHERE cl.card_id = c.id AND COALESCE(cl.desktop, 1) = 1) AS has_chat,
         GREATEST(c.updated_at, COALESCE((SELECT MAX(n.created_at) FROM notes n WHERE n.card_id = c.id), c.updated_at),
             COALESCE((SELECT MAX(e.created_at) FROM events e WHERE e.card_id = c.id), c.updated_at)) AS last_activity,
         NOW() AS now_at
@@ -987,8 +987,10 @@ function find_chat(PDO $db, int $card, ?string $folder = null, bool $current = f
 function last_linked_card(PDO $db, array $clis, int $prefer): ?int
 {
     $marks = implode(',', array_fill(0, count($clis), '?'));
-    $st = $db->prepare("SELECT card_id FROM chat_links WHERE session_id IN ($marks) ORDER BY linked_at DESC, card_id = ? DESC LIMIT 1");
-    $st->execute([...$clis, $prefer]);
+    // Only a board prompt moves a chat on: a card Claude merely ran status on (a follow-up it made) doesn't.
+    $st = $db->prepare("SELECT card_id FROM chat_links WHERE session_id IN ($marks) AND (card_id = ? OR by_prompt = 1)
+        ORDER BY linked_at DESC, card_id = ? DESC LIMIT 1");
+    $st->execute([...$clis, $prefer, $prefer]);
     $id = $st->fetchColumn();
     return $id === false ? null : (int) $id;
 }
@@ -1032,7 +1034,8 @@ function card_from_command(string $command): ?int
 }
 
 // Links the session to the card and lights the card's dot; false if there is no such card.
-function hook_link(PDO $db, string $session, int $card): bool
+// $byPrompt: a board prompt started the card here (the chat moved on to it). $desktop: a desktop-app chat (null: unknown).
+function hook_link(PDO $db, string $session, int $card, bool $byPrompt = false, ?bool $desktop = null): bool
 {
     $st = $db->prepare('SELECT 1 FROM cards WHERE id = ?');
     $st->execute([$card]);
@@ -1042,8 +1045,9 @@ function hook_link(PDO $db, string $session, int $card): bool
     $db->prepare('INSERT INTO sessions (session_id, card_id, seen_at) VALUES (?, ?, NOW())
         ON DUPLICATE KEY UPDATE card_id = VALUES(card_id), seen_at = NOW(), active = 1')->execute([$session, $card]);
     // Separate from sessions so the card keeps its Open chat button after the chat moves on to another card.
-    $db->prepare('INSERT INTO chat_links (card_id, session_id) VALUES (?, ?)
-        ON DUPLICATE KEY UPDATE linked_at = NOW()')->execute([$card, $session]);
+    $db->prepare('INSERT INTO chat_links (card_id, session_id, by_prompt, desktop) VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE linked_at = NOW(), by_prompt = GREATEST(by_prompt, VALUES(by_prompt)),
+            desktop = COALESCE(VALUES(desktop), desktop)')->execute([$card, $session, (int) $byPrompt, $desktop === null ? null : (int) $desktop]);
     hook_touch($db, $session);
     return true;
 }
@@ -1077,10 +1081,11 @@ function hook_event(PDO $db, array $in): void
     if ($session === '') {
         return;
     }
+    $desktop = isset($in['kanban_desktop']) ? (bool) $in['kanban_desktop'] : null; // set by hooks/claude_hook.php
     switch ($in['hook_event_name'] ?? '') {
         case 'UserPromptSubmit':
             $card = card_from_prompt((string) ($in['prompt'] ?? ''));
-            if ($card === null || !hook_link($db, $session, $card)) {
+            if ($card === null || !hook_link($db, $session, $card, true, $desktop)) {
                 hook_touch($db, $session);
             }
             break;
@@ -1090,7 +1095,7 @@ function hook_event(PDO $db, array $in): void
         case 'PostToolUse':
             // Any shell tool (Bash, PowerShell) that ran board.php on card N links this session to N.
             $card = card_from_command((string) ($in['tool_input']['command'] ?? ''));
-            if ($card === null || !hook_link($db, $session, $card)) {
+            if ($card === null || !hook_link($db, $session, $card, false, $desktop)) {
                 hook_touch($db, $session);
             }
             break;

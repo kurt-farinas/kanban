@@ -99,9 +99,9 @@ function chat(string $id, string $cli, array $more = []): array
     return array_merge(['sessionId' => "local_$id", 'cliSessionId' => $cli, 'title' => "Chat $id", 'isArchived' => false], $more);
 }
 
-function link_session(PDO $db, string $session, int $card, string $linked): void
+function link_session(PDO $db, string $session, int $card, string $linked, int $byPrompt = 0): void
 {
-    $db->prepare('INSERT INTO chat_links (card_id, session_id, linked_at) VALUES (?, ?, ?)')->execute([$card, $session, $linked]);
+    $db->prepare('INSERT INTO chat_links (card_id, session_id, linked_at, by_prompt) VALUES (?, ?, ?, ?)')->execute([$card, $session, $linked, $byPrompt]);
 }
 
 // Runs $fn, then drops every project added beyond the four seeded ones, with their cards and sections.
@@ -437,7 +437,7 @@ $tests = [
         move_card($db, $a, 'building', 'user');
         move_card($db, $b, 'building', 'user');
         link_session($db, 'cli-m', $a, '2026-01-01 10:00:00');
-        link_session($db, 'cli-m', $b, '2026-01-01 11:00:00');
+        link_session($db, 'cli-m', $b, '2026-01-01 11:00:00', 1);
         $link = fn($id) => card_open_link($db, get_card($db, $id))['link'];
         with_chats(['local_m.json' => chat('m', 'cli-m')], function () use ($db, $a, $b, $link) {
             ok(str_starts_with($link($a), 'claude://code/new?'), 'moved-on chat reused for A: ' . $link($a));
@@ -445,7 +445,7 @@ $tests = [
             ok(find_chat($db, $a)['id'] === 'local_m', 'chat button rule changed');
         });
         $db->exec("DELETE FROM chat_links WHERE card_id = $b");
-        link_session($db, 'cli-m2', $b, '2026-01-01 11:00:00'); // the same chat, continued under a new CLI id
+        link_session($db, 'cli-m2', $b, '2026-01-01 11:00:00', 1); // the same chat, continued under a new CLI id
         with_chats(['local_m.json' => chat('m', 'cli-m2', ['priorCliSessionIds' => ['cli-m']])], function () use ($a, $link) {
             ok(str_starts_with($link($a), 'claude://code/new?'), 'moved on under a new CLI id: ' . $link($a));
         });
@@ -454,6 +454,39 @@ $tests = [
             ok($link($a) === 'claude://code/continue?session=local_m', 'tie, A: ' . $link($a));
             ok($link($b) === 'claude://code/continue?session=local_m', 'tie, B: ' . $link($b));
         });
+    },
+    'chat_moves_on_only_by_prompt' => function (PDO $db) {
+        $a = add_card($db, 'A', 'Alpha', 'user');
+        $b = add_card($db, 'B', 'Alpha', 'user');
+        move_card($db, $a, 'building', 'user');
+        $ev = fn($e) => hook_event($db, ['session_id' => 'cli-p', 'kanban_desktop' => true] + $e);
+        $times = fn() => $db->exec("UPDATE chat_links SET linked_at = IF(card_id = $a, '2026-01-01 10:00:00', '2026-01-01 11:00:00')");
+        $ev(['hook_event_name' => 'UserPromptSubmit', 'prompt' => "Build card #$a (Alpha): A"]);
+        $ev(['hook_event_name' => 'PostToolUse', 'tool_input' => ['command' => "php board.php status $b \"follow-up\""]]);
+        $times(); // B linked later, but only by Claude touching it (a follow-up card)
+        with_chats(['local_p.json' => chat('p', 'cli-p')], function () use ($db, $a) {
+            ok(card_open_link($db, get_card($db, $a))['link'] === 'claude://code/continue?session=local_p', 'follow-up card took the chat');
+        });
+        $ev(['hook_event_name' => 'UserPromptSubmit', 'prompt' => "Build card #$b (Alpha): B"]);
+        $times(); // now the user started B in this chat
+        with_chats(['local_p.json' => chat('p', 'cli-p')], function () use ($db, $a) {
+            ok(str_starts_with(card_open_link($db, get_card($db, $a))['link'], 'claude://code/new?'), 'chat did not move on');
+        });
+        $ev(['hook_event_name' => 'PostToolUse', 'tool_input' => ['command' => "php board.php status $b \"again\""]]);
+        ok((int) $db->query("SELECT by_prompt FROM chat_links WHERE card_id = $b")->fetchColumn() === 1, 'status link cleared by_prompt');
+    },
+    'has_chat_only_for_desktop_chats' => function (PDO $db) {
+        $term = add_card($db, 'T', 'Alpha', 'user');
+        $desk = add_card($db, 'D', 'Alpha', 'user');
+        $old = add_card($db, 'O', 'Alpha', 'user');
+        hook_event($db, ['session_id' => 'cli-t', 'kanban_desktop' => false, 'hook_event_name' => 'UserPromptSubmit', 'prompt' => "Build card #$term (Alpha): T"]);
+        hook_event($db, ['session_id' => 'cli-d', 'kanban_desktop' => true, 'hook_event_name' => 'UserPromptSubmit', 'prompt' => "Build card #$desk (Alpha): D"]);
+        link_session($db, 'cli-o', $old, '2026-01-01 10:00:00'); // linked before desktop was recorded
+        ok(get_card($db, $term)['has_chat'] === 0, 'terminal chat shows the chat button');
+        ok(get_card($db, $desk)['has_chat'] === 1, 'desktop chat lost the chat button');
+        ok(get_card($db, $old)['has_chat'] === 1, 'older link lost the chat button');
+        hook_event($db, ['session_id' => 'cli-t', 'kanban_desktop' => true, 'hook_event_name' => 'UserPromptSubmit', 'prompt' => 'go on']);
+        ok(get_card($db, $term)['has_chat'] === 0, 'unlinking prompt changed the row');
     },
     'forget_chats_clears_has_chat' => function (PDO $db) {
         $id = add_card($db, 'A', 'Alpha', 'user');

@@ -17,6 +17,8 @@ try {
             throw $e;
         }
         @unlink($down);
+        // The desktop app gives its chats this id (local_…); a terminal session has none, so the board can't open it.
+        $in['kanban_desktop'] = str_starts_with((string) getenv('CLAUDE_CODE_HOST_SESSION_ID'), 'local_');
         hook_event($db, $in);
         if (($in['hook_event_name'] ?? '') === 'Stop') {
             backup_if_due($db); // covers days the PC stays on without a fresh login

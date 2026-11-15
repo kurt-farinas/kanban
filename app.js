@@ -902,7 +902,7 @@ function openQuestion(c, col) {
         return {
             title: `Deploy #${c.id} (${c.project}) to its live site?`,
             body: "Claude follows that project's deploy rules: backup, log, then check the site."
-                + (c.has_chat ? " This card's chat opens (a new one if that chat was archived)." : ''),
+                + (c.has_chat ? " This card's chat opens (a new one if that chat can't be reused)." : ''),
             ok: c.has_chat ? 'Deploy in its chat' : 'Start deploy chat',
             danger: true,
         };
@@ -911,7 +911,7 @@ function openQuestion(c, col) {
     return {
         title: `${verb} #${c.id} with Claude?`,
         body: c.has_chat
-            ? `"${c.title}" moves to ${LABELS[col]} and this card's chat opens (a new one if that chat was archived).`
+            ? `"${c.title}" moves to ${LABELS[col]} and this card's chat opens (a new one if that chat can't be reused).`
             : `"${c.title}" moves to ${LABELS[col]} and a new Claude chat opens in ${c.project}'s folder.`,
         ok: 'Move and open Claude',
     };
